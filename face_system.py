@@ -12,7 +12,10 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import argparse
 import json
+import torch
+import sys
 from datetime import datetime
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,98 +24,128 @@ logger = logging.getLogger(__name__)
 class FaceSystem:
     def __init__(self, batch_size=16):
         try:
-            # Force GPU usage
-           
-            os.environ['OPENVINO_DEVICE'] = 'GPU'
-            os.environ['ONNXRUNTIME_PROVIDER_PRIORITY'] = 'OpenVINOExecutionProvider'
+                # Set CUDA device and memory settings
+            os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+            if torch.cuda.is_available():
+                torch.backends.cudnn.benchmark = True  # Enable CUDNN auto-tuner
+                torch.backends.cudnn.deterministic = False
+                # Set higher memory fraction for GPU
+                torch.cuda.set_per_process_memory_fraction(0.8)
+                logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
+                logger.info(f"CUDA Version: {torch.version.cuda}")
 
-            # Initialize OpenVINO
-            core = ov.Core()
-            if 'GPU' not in core.available_devices:
-                raise ValueError("GPU device not available")
-            
-            logger.info(f"GPU device: {core.get_property('GPU', 'FULL_DEVICE_NAME')}")
-            
-            # Initialize with GPU
+            # Initialize OpenVINO if available
+            try:
+                core = ov.Core()
+                if 'GPU' in core.available_devices:
+                    os.environ['OPENVINO_DEVICE'] = 'GPU'
+                    logger.info(f"OpenVINO GPU device: {core.get_property('GPU', 'FULL_DEVICE_NAME')}")
+            except Exception as e:
+                logger.warning(f"OpenVINO initialization failed: {str(e)}")
+
+            # Set provider priority
+            providers = []
+            if torch.cuda.is_available():
+                providers.append('CUDAExecutionProvider')
+            if 'OPENVINO_DEVICE' in os.environ:
+                providers.append('OpenVINOExecutionProvider')
+            providers.append('CPUExecutionProvider')
+
+            # Configure provider options for better performance
+            provider_options = {
+                'CUDAExecutionProvider': {
+                    'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                    'gpu_mem_limit': str(int(11 * 1024 * 1024 * 1024)),  # 11GB limit
+                    'arena_extend_strategy': 'kNextPowerOfTwo',
+                    'do_copy_in_default_stream': '1'
+                }
+            }
+
+            # Initialize face analysis with GPU optimization
             self.app = FaceAnalysis(
                 name="buffalo_l",
-                providers=['OpenVINOExecutionProvider'],
+                providers=providers,
+                provider_options=provider_options,
                 allowed_modules=['detection', 'recognition']
             )
             
+            # Prepare with optimal detection size
             self.app.prepare(ctx_id=0, det_size=(640, 640))
-            logger.info("Model preparation completed with GPU optimization")
+            logger.info(f"Model preparation completed with providers: {providers}")
 
+            # Optimize batch processing
             self.batch_size = batch_size
-            self.image_size_limit = 1920
+            self.image_size_limit = 1920  # Max image size
             self.thread_lock = threading.Lock()
             
-            # Clustering parameters
+            # Use thread pool for parallel processing
+            self.thread_pool = ThreadPoolExecutor(max_workers=4)
+            
+            # Clustering parameters optimized for speed
             self.clustering_params = {
                 'eps': 0.9,
                 'min_samples': 2,
                 'same_image_threshold': 0.70,
-                'face_similarity_metric': 'cosine'
+                'face_similarity_metric': 'cosine',
+                'n_jobs': -1  # Use all CPU cores for clustering
             }
             
-            # Representative faces storage
             self.representative_faces = {}
 
         except Exception as e:
             logger.error(f"Error initializing GPU: {str(e)}")
+            logger.exception("Detailed error:")
             raise
 
     def process_image_batch(self, image_paths: List[str]) -> List[Dict]:
-        """Process a batch of images for face detection and recognition."""
+        """Process a batch of images with GPU optimization."""
         all_faces = []
-        for path in image_paths:
-            try:
-                img = cv2.imread(path)
-                if img is None:
-                    continue
-                    
-                h, w = img.shape[:2]
-                if max(h, w) > self.image_size_limit:
-                    scale = self.image_size_limit / max(h, w)
-                    img = cv2.resize(img, None, fx=scale, fy=scale, 
-                                   interpolation=cv2.INTER_AREA)
-                
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                
-                with self.thread_lock:
-                    faces = self.app.get(img_rgb)
-                
-                if not faces:
-                    continue
-                    
-                for idx, face in enumerate(faces):
-                    try:
-                        # Get face crop using alignment
-                        face_img = face_align.norm_crop(img_rgb, face.kps)
+        try:
+            # Process images in parallel
+            def process_single_image(path):
+                try:
+                    img = cv2.imread(path)
+                    if img is None:
+                        return []
                         
-                        # Calculate face size from bbox
-                        x1, y1, x2, y2 = face.bbox
-                        face_size = (x2 - x1) * (y2 - y1)
-                        
-                        face_info = {
-                            'embedding': face.embedding,
-                            'face_image': face_img,
-                            'original_path': path,
-                            'face_index': idx,
-                            'det_score': float(face.det_score),
-                            'bbox': face.bbox,
-                            'kps': face.kps,  # Add keypoints for alignment calculation
-                            'face_size': face_size  # Add face size
-                        }
-                        all_faces.append(face_info)
-                    except Exception as e:
-                        logger.error(f"Error processing face {idx} in {path}: {str(e)}")
-                        continue
+                    h, w = img.shape[:2]
+                    if max(h, w) > self.image_size_limit:
+                        scale = self.image_size_limit / max(h, w)
+                        img = cv2.resize(img, None, fx=scale, fy=scale, 
+                                       interpolation=cv2.INTER_AREA)
                     
-            except Exception as e:
-                logger.error(f"Error processing {path}: {str(e)}")
-                continue
-                
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    
+                    with self.thread_lock:
+                        faces = self.app.get(img_rgb)
+                    
+                    if not faces:
+                        return []
+                        
+                    return [{
+                        'embedding': face.embedding,
+                        'face_image': face_align.norm_crop(img_rgb, face.kps),
+                        'original_path': path,
+                        'face_index': idx,
+                        'det_score': float(face.det_score),
+                        'bbox': face.bbox,
+                        'kps': face.kps,
+                        'face_size': (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1])
+                    } for idx, face in enumerate(faces)]
+                        
+                except Exception as e:
+                    logger.error(f"Error processing {path}: {str(e)}")
+                    return []
+
+            # Process images in parallel using thread pool
+            results = list(self.thread_pool.map(process_single_image, image_paths))
+            for face_list in results:
+                all_faces.extend(face_list)
+
+        except Exception as e:
+            logger.error(f"Error in batch processing: {str(e)}")
+            logger.exception("Detailed error:")
+        
         return all_faces
 
     def cluster_faces(self, face_data: List[Dict]) -> List[int]:
@@ -312,98 +345,89 @@ class FaceSystem:
             # Fallback to simple detection score
             return max(cluster_faces, key=lambda x: x['det_score'])
 
-   
+
     def find_matching_faces(self, query_image: np.ndarray, clustered_dir: str, similarity_threshold: float = 0.83) -> Dict:
-            """Find matches using representative faces and return source files."""
-            try:
-                if not self.representative_faces:
-                    return {
-                        'status': 'error',
-                        'message': 'No representative faces loaded',
-                        'matches': [],
-                        'sources_file': None
-                    }
+        """Optimized face matching with GPU acceleration."""
+        try:
+            if not self.representative_faces:
+                return {"status": "error", "message": "No representative faces loaded"}
 
-                # Get query face
-                faces = self.app.get(query_image)
-                if not faces:
-                    return {
-                        'status': 'error',
-                        'message': 'No face detected in query image',
-                        'matches': [],
-                        'sources_file': None
-                    }
+            # Get query face with GPU acceleration
+            faces = self.app.get(query_image)
+            if not faces:
+                return {"status": "error", "message": "No face detected in query image"}
+            
+            query_face = max(faces, key=lambda x: x.det_score)
+            matches = []
+            
+            # Vectorized similarity calculation
+            query_embedding = query_face.embedding
+            query_norm = np.linalg.norm(query_embedding)
+            query_normalized = query_embedding / query_norm
+            
+            # Batch process all comparisons
+            for label, rep_face in self.representative_faces.items():
+                rep_embedding = rep_face['embedding']
+                rep_norm = np.linalg.norm(rep_embedding)
+                similarity = np.dot(query_normalized, rep_embedding / rep_norm)
+                similarity = (similarity + 1.0) / 2.0
                 
-                query_face = max(faces, key=lambda x: x.det_score)
-                matches = []
-                matched_sources = {}  # Store filenames for each matching cluster
-                
-                # Compare with representative faces
-                for label, rep_face in self.representative_faces.items():
-                    similarity = self.calculate_similarity(query_face.embedding, rep_face['embedding'])
+                if similarity >= similarity_threshold:
+                    cluster_dir = os.path.join(clustered_dir, f"person_{label}")
+                    sources_path = os.path.join(cluster_dir, "sources.txt")
                     
-                    if similarity >= similarity_threshold:
-                        # Get source files for this cluster
-                        cluster_dir = os.path.join(clustered_dir, f"person_{int(label)}")
-                        sources_path = os.path.join(cluster_dir, "sources.txt")
-                        
-                        if os.path.exists(sources_path):
-                            with open(sources_path, 'r') as f:
-                                source_files = f.read().splitlines()
-                        else:
-                            source_files = []
-
-                        matched_sources[label] = source_files
-                        
-                        matches.append({
-                            'person_id': label,
-                            'similarity': float(similarity * 100),
-                            'original_image': rep_face['original_path'],
-                            'source_files': source_files
-                        })
-                
-                # Sort matches by similarity
-                matches.sort(key=lambda x: x['similarity'], reverse=True)
-                
-                # Create results directory
-                results_dir = "face_search_results"
-                os.makedirs(results_dir, exist_ok=True)
-                
-                # Generate sources file
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                sources_file = os.path.join(results_dir, f"sources_{timestamp}.txt")
-                
-                with open(sources_file, 'w') as f:
-                    f.write(f"Face Search Results - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write("-" * 50 + "\n\n")
+                    source_files = []
+                    if os.path.exists(sources_path):
+                        with open(sources_path, 'r') as f:
+                            source_files = f.read().splitlines()
                     
-                    if not matches:
-                        f.write("No matching faces found above similarity threshold.\n")
-                    else:
-                        f.write(f"Found matches in {len(matches)} clusters:\n\n")
-                        for match in matches:
-                            f.write(f"Person {match['person_id']} (Similarity: {match['similarity']:.1f}%)\n")
-                            f.write("Found in files:\n")
-                            for source in match['source_files']:
-                                f.write(f"  - {source}\n")
-                            f.write("\n")
-                
-                return {
-                    'status': 'success',
-                    'message': f"Found {len(matches)} matching persons",
-                    'matches': matches,
-                    'sources_file': sources_file
-                }
-                
-            except Exception as e:
-                logger.error(f"Error in face matching: {str(e)}")
-                return {
-                    'status': 'error',
-                    'message': str(e),
-                    'matches': [],
-                    'sources_file': None
-                }
+                    matches.append({
+                        'person_id': label,
+                        'similarity': float(similarity * 100),
+                        'original_image': rep_face['original_path'],
+                        'source_files': source_files
+                    })
 
+            matches.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            # Generate results file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            results_dir = "face_search_results"
+            os.makedirs(results_dir, exist_ok=True)
+            sources_file = os.path.join(results_dir, f"sources_{timestamp}.txt")
+            
+            with open(sources_file, 'w') as f:
+                f.write(f"Face Search Results - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("-" * 50 + "\n\n")
+                
+                if not matches:
+                    f.write("No matching faces found above similarity threshold.\n")
+                else:
+                    f.write(f"Found matches in {len(matches)} clusters:\n\n")
+                    for match in matches:
+                        f.write(f"Person {match['person_id']} (Similarity: {match['similarity']:.1f}%)\n")
+                        f.write("Found in files:\n")
+                        for source in match['source_files']:
+                            f.write(f"  - {source}\n")
+                        f.write("\n")
+
+            return {
+                'status': 'success',
+                'message': f"Found {len(matches)} matching persons",
+                'matches': matches,
+                'sources_file': sources_file
+            }
+
+        except Exception as e:
+            logger.error(f"Error in face matching: {str(e)}")
+            logger.exception("Detailed error:")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'matches': [],
+                'sources_file': None
+            }
+   
     def calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Calculate normalized cosine similarity."""
         norm1 = np.linalg.norm(embedding1)
@@ -422,7 +446,7 @@ def main():
                           help='Input directory containing images')
         parser.add_argument('--output', default="clustered_faces",
                           help='Output directory for clustered faces')
-        parser.add_argument('--batch-size', type=int, default=16,
+        parser.add_argument('--batch-size', type=int, default=32,  # Increased batch size for GPU
                           help='Batch size for processing')
         parser.add_argument('--mode', choices=['cluster', 'search'], required=True,
                           help='Operation mode: cluster or search')
@@ -432,10 +456,13 @@ def main():
         
         args = parser.parse_args()
         
-        # Initialize system
+        # Initialize system with CUDA prioritization
         face_system = FaceSystem(batch_size=args.batch_size)
         
         if args.mode == 'cluster':
+            start_time = time.time()
+            logger.info("Starting clustering process...")
+            
             # Load and process images
             image_paths = [
                 os.path.join(args.input, f) for f in os.listdir(args.input)
@@ -445,70 +472,111 @@ def main():
             if not image_paths:
                 logger.error(f"No images found in {args.input}")
                 return
-                
-            logger.info(f"Processing {len(image_paths)} images...")
             
-            # Process in batches
+            total_images = len(image_paths)
+            logger.info(f"Found {total_images} images to process")
+            
+            # Process in batches with timing
             all_faces = []
-            for i in range(0, len(image_paths), args.batch_size):
+            batch_start_time = time.time()
+            for i in range(0, total_images, args.batch_size):
                 batch = image_paths[i:i + args.batch_size]
                 faces = face_system.process_image_batch(batch)
                 all_faces.extend(faces)
-                logger.info(f"Processed {min(i + args.batch_size, len(image_paths))}/{len(image_paths)} images...")
+                
+                # Log progress with timing
+                images_processed = min(i + args.batch_size, total_images)
+                batch_time = time.time() - batch_start_time
+                images_per_second = len(batch) / batch_time
+                logger.info(f"Processed {images_processed}/{total_images} images "
+                          f"({images_per_second:.2f} images/second)")
+                batch_start_time = time.time()
             
-            # Perform clustering
-            logger.info("Clustering faces...")
+            # Perform clustering with timing
+            logger.info("Starting face clustering...")
+            cluster_start_time = time.time()
             labels = face_system.cluster_faces(all_faces)
+            cluster_time = time.time() - cluster_start_time
             
-            # Save results
-            logger.info("Saving results...")
+            # Save results with timing
+            logger.info("Saving clustered results...")
+            save_start_time = time.time()
             face_system.save_clusters(all_faces, labels, args.output)
+            save_time = time.time() - save_start_time
             
+            # Final statistics
             unique_people = len(set(labels) - {-1})
-            logger.info(f"Found {unique_people} unique people across {len(all_faces)} faces")
+            total_time = time.time() - start_time
+            
+            logger.info(f"""
+Clustering completed:
+- Total time: {total_time:.2f} seconds
+- Images processed: {total_images}
+- Processing speed: {total_images/total_time:.2f} images/second
+- Faces found: {len(all_faces)}
+- Unique people: {unique_people}
+- Clustering time: {cluster_time:.2f} seconds
+- Saving time: {save_time:.2f} seconds
+""")
             
         elif args.mode == 'search':
-            # Search mode
+            # Search mode timing
+            start_time = time.time()
+            logger.info("Starting face search...")
+            
             if not args.query:
                 logger.error("Query image required for search mode")
                 return
-                
+            
             if not os.path.exists(args.output):
                 logger.error("Clustered faces directory not found. Run clustering first.")
                 return
-                
-            # Load representative faces first
+            
+            # Load representative faces
+            load_start_time = time.time()
             if not face_system.load_representative_faces(args.output):
                 logger.error("Failed to load representative faces")
                 return
-                
-            # Load query image
+            load_time = time.time() - load_start_time
+            
+            # Load and process query image
             query_img = cv2.imread(args.query)
             if query_img is None:
                 logger.error("Could not read query image")
                 return
-                
+            
             query_img = cv2.cvtColor(query_img, cv2.COLOR_BGR2RGB)
             
-         # Perform search
+            # Perform search with timing
+            search_start_time = time.time()
             results = face_system.find_matching_faces(query_img, args.output, args.threshold)
+            search_time = time.time() - search_start_time
+            
+            total_time = time.time() - start_time
             
             if results['status'] == 'success':
-                logger.info(results['message'])
+                logger.info(f"""
+Search completed:
+- Total time: {total_time:.2f} seconds
+- Loading time: {load_time:.2f} seconds
+- Search time: {search_time:.2f} seconds
+- Matches found: {len(results['matches'])}
+""")
+                
                 if results['matches']:
                     logger.info(f"Results saved to: {results['sources_file']}")
                     for match in results['matches']:
                         logger.info(f"Match found in cluster {match['person_id']}")
                         logger.info(f"Similarity: {match['similarity']:.2f}%")
-                        logger.info(f"Original image: {match['original_image']}")
                         logger.info("-" * 50)
                 else:
                     logger.info("No matches found above threshold")
             else:
                 logger.error(results['message'])
-        
+    
     except Exception as e:
         logger.error(f"Error in main execution: {str(e)}")
+        logger.exception("Detailed error trace:")
 
 if __name__ == "__main__":
     main()
