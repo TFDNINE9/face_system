@@ -7,7 +7,7 @@ import os
 import cv2
 import numpy as np
 from datetime import datetime
-from face_system import FaceSystem
+from face_system_cuda import FaceSystem
 import logging
 
 # Set up logging

@@ -23,6 +23,7 @@ face_search_results/
 uploads/
 album/
 clustered_faces/
+WD_25_02_15/
 
 # Model weights and binary files
 # .insightface/  # Comment this out if you want to include pre-downloaded models

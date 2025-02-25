@@ -21,7 +21,7 @@ import time
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class FaceSystem:
+class FaceSystemCuda:
     def __init__(self, batch_size=16):
         try:
                 # Set CUDA device and memory settings
@@ -457,7 +457,7 @@ def main():
         args = parser.parse_args()
         
         # Initialize system with CUDA prioritization
-        face_system = FaceSystem(batch_size=args.batch_size)
+        face_system = FaceSystemCuda(batch_size=args.batch_size)
         
         if args.mode == 'cluster':
             start_time = time.time()
