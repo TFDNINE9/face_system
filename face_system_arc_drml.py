@@ -21,121 +21,98 @@ import time
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class FaceSystemArc:
+class FaceSystemArcDRML:
     def __init__(self, batch_size=16):
         try:
-            # Initialize OpenVINO Core to detect available devices
-            core = ov.Core()
-            available_devices = core.available_devices
-            logger.info(f"Available devices: {available_devices}")
-            
-            # Check if Intel GPU is available
-            has_intel_gpu = 'GPU' in available_devices
-            
-            # Configure providers and their options as a dictionary
-            providers = []
-            provider_options = {}
-            
-            if has_intel_gpu:
-                # Use OpenVINO for Intel GPU
-                providers.append('OpenVINOExecutionProvider')
-                provider_options['OpenVINOExecutionProvider'] = {
-                    'device_type': 'GPU_FP32'  # Target Intel GPU with FP32 precision
-                }
-                gpu_name = core.get_property('GPU', 'FULL_DEVICE_NAME')
-                logger.info(f"Intel GPU detected: {gpu_name}")
-            else:
-                logger.warning("No GPU detected. Falling back to CPU mode.")
-            
-            # Add CPU as fallback
-            providers.append('CPUExecutionProvider')
-            provider_options['CPUExecutionProvider'] = {}
-            
-            # Initialize face analysis with proper provider configuration
-            self.app = FaceAnalysis(
-                name="buffalo_l",
-                providers=providers,
-                provider_options=provider_options,
-                allowed_modules=['detection', 'recognition']
-            )
-            
-            # Prepare with optimal detection size
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
-            logger.info(f"Model preparation completed with providers: {providers}")
-            
-            # Verify GPU usage (optional but helpful)
-            if has_intel_gpu:
-                try:
-                    logger.info(f"Active device: {core.get_property('GPU', 'DEVICE_TYPE')}")
-                except:
-                    logger.warning("Could not verify GPU usage post-initialization")
-            
-            # Initialize other parameters
-            self.batch_size = batch_size
-            self.image_size_limit = 1920
-            # Remove thread_lock unless used elsewhere
-            # self.thread_lock = threading.Lock()
-            
-            # Clustering parameters
-            self.clustering_params = {
-                'eps': 0.9,
-                'min_samples': 2,
-                'same_image_threshold': 0.70,
-                'face_similarity_metric': 'cosine'
-            }
-            
-            self.representative_faces = {}
+                    # Configure providers and options for DirectML
+                    providers = []
+                    provider_options = {}
+                    
+                    # Add DirectML as the primary provider
+                    providers.append('DirectMLExecutionProvider')
+                    provider_options['DirectMLExecutionProvider'] = {
+                        'device_id': 0  # Use GPU 0 (Arc B580), adjust if multiple GPUs
+                    }
+                    logger.info("Attempting to initialize with DirectML on Intel Arc GPU")
+                    
+                    # Add CPU as fallback
+                    providers.append('CPUExecutionProvider')
+                    provider_options['CPUExecutionProvider'] = {}
+                    
+                    # Initialize FaceAnalysis with DirectML
+                    self.app = FaceAnalysis(
+                        name="buffalo_l",
+                        providers=providers,
+                        provider_options=provider_options,
+                        allowed_modules=['detection', 'recognition']
+                    )
+                    
+                    # Prepare with optimal detection size
+                    self.app.prepare(ctx_id=0, det_size=(640, 640))
+                    logger.info(f"Model preparation completed with providers: {providers}")
+                    
+                    # Initialize other parameters
+                    self.batch_size = batch_size
+                    self.image_size_limit = 1920
+                    
+                    # Clustering parameters
+                    self.clustering_params = {
+                        'eps': 0.9,
+                        'min_samples': 2,
+                        'same_image_threshold': 0.70,
+                        'face_similarity_metric': 'cosine'
+                    }
+                    
+                    self.representative_faces = {}
 
         except Exception as e:
-            logger.error(f"Error initializing GPU: {str(e)}")
+            logger.error(f"Error initializing DirectML: {str(e)}")
             logger.exception("Detailed error:")
+            logger.warning("DirectML initialization failed. Ensure onnxruntime-directml is installed and Arc B580 drivers are up-to-date.")
             raise
 
     def process_image_batch(self, image_paths: List[str]) -> List[Dict]:
-        """Process a batch of images with GPU optimization."""
         all_faces = []
         try:
-            # Process images in parallel
-            def process_single_image(path):
-                try:
-                    img = cv2.imread(path)
-                    if img is None:
-                        return []
-                        
-                    h, w = img.shape[:2]
-                    if max(h, w) > self.image_size_limit:
-                        scale = self.image_size_limit / max(h, w)
-                        img = cv2.resize(img, None, fx=scale, fy=scale, 
-                                       interpolation=cv2.INTER_AREA)
-                    
-                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    
-                    with self.thread_lock:
-                        faces = self.app.get(img_rgb)
-                    
-                    if not faces:
-                        return []
-                        
-                    return [{
-                        'embedding': face.embedding,
-                        'face_image': face_align.norm_crop(img_rgb, face.kps),
-                        'original_path': path,
-                        'face_index': idx,
-                        'det_score': float(face.det_score),
-                        'bbox': face.bbox,
-                        'kps': face.kps,
-                        'face_size': (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1])
-                    } for idx, face in enumerate(faces)]
-                        
-                except Exception as e:
-                    logger.error(f"Error processing {path}: {str(e)}")
-                    return []
-
-            # Process images in parallel using thread pool
-            results = list(self.thread_pool.map(process_single_image, image_paths))
-            for face_list in results:
-                all_faces.extend(face_list)
-
+            images = []
+            valid_paths = []
+            for path in image_paths:
+                img = cv2.imread(path)
+                if img is None:
+                    logger.warning(f"Failed to load image: {path}")
+                    continue
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                h, w = img_rgb.shape[:2]
+                if max(h, w) > self.image_size_limit:
+                    scale = self.image_size_limit / max(h, w)
+                    new_w, new_h = int(w * scale), int(h * scale)
+                    if new_w > 0 and new_h > 0:
+                        img_rgb = cv2.resize(img_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    else:
+                        continue
+                images.append(img_rgb)
+                valid_paths.append(path)
+            
+            if not images:
+                return []
+            
+            batch_images = np.stack(images, axis=0)
+            faces_batch = self.app.get(batch_images)
+            
+            for img_idx, faces in enumerate(faces_batch):
+                if not faces:
+                    continue
+                all_faces.extend([{
+                    'embedding': face.embedding,
+                    'face_image': face_align.norm_crop(images[img_idx], face.kps),
+                    'original_path': valid_paths[img_idx],
+                    'face_index': idx,
+                    'det_score': float(face.det_score),
+                    'bbox': face.bbox,
+                    'kps': face.kps,
+                    'face_size': (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1])
+                } for idx, face in enumerate(faces)])
+        
         except Exception as e:
             logger.error(f"Error in batch processing: {str(e)}")
             logger.exception("Detailed error:")
@@ -451,7 +428,7 @@ def main():
         args = parser.parse_args()
         
         # Initialize system with CUDA prioritization
-        face_system = FaceSystemArc(batch_size=args.batch_size)
+        face_system = FaceSystemArcDRML(batch_size=args.batch_size)
         
         if args.mode == 'cluster':
             start_time = time.time()
