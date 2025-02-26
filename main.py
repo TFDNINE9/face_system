@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import json
 from datetime import datetime
-from face_system_arc_drml import FaceSystemArcDRML
+from face_system_cuda import FaceSystemCuda
 import logging
 import hashlib
 
@@ -26,7 +26,7 @@ UPLOAD_DIR = "uploads"  # For query images in search
 app = FastAPI(title="Face Clustering and Search API")
 
 # Initialize FaceSystem
-face_system = FaceSystemArcDRML(batch_size=16)
+face_system = FaceSystemCuda(batch_size=16)
 
 # Create necessary directories with absolute paths
 UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
