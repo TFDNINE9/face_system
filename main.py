@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # API Configuration
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+BASE_URL = os.getenv("BASE_URL", "http://192.168.1.35:8000")
 ALBUM_DIR = os.getenv("ALBUM_DIR", "album")  # Directory with existing images
 CLUSTER_DIR = "clustered_faces"  # Output directory for clusters
 UPLOAD_DIR = "uploads"  # For query images in search
