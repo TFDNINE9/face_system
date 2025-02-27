@@ -24,6 +24,9 @@ uploads/
 album/
 clustered_faces/
 WD_25_02_15/
+new_uploads/
+temp_album/
+temp_search/
 
 # Model weights and binary files
 # .insightface/  # Comment this out if you want to include pre-downloaded models

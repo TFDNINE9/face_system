@@ -1,259 +1,283 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, BackgroundTasks, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import shutil
 import os
 import cv2
 import numpy as np
-import json
 from datetime import datetime
-from face_system_cuda import FaceSystemCuda
 import logging
-import hashlib
+import json
+import tempfile
+import time
+from face_system import FaceSystem, process_temp_album, clear_temp_folder
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # API Configuration
-BASE_URL = os.getenv("BASE_URL", "http://192.168.1.35:8000")
-ALBUM_DIR = os.getenv("ALBUM_DIR", "album")  # Directory with existing images
-CLUSTER_DIR = "clustered_faces"  # Output directory for clusters
-UPLOAD_DIR = "uploads"  # For query images in search
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+TEMP_ALBUM_DIR = os.getenv("TEMP_ALBUM_DIR", "temp_album")  # Temporary folder for uploads
+ALBUM_DIR = os.getenv("ALBUM_DIR", "album")                 # Permanent storage for original images
+CLUSTER_DIR = os.getenv("CLUSTER_DIR", "clustered_faces")   # Storage for face clusters
+RESULTS_DIR = os.getenv("RESULTS_DIR", "face_search_results")  # Directory for search results
 
-# Initialize FastAPI app
-app = FastAPI(title="Face Clustering and Search API")
+# Initialize FastAPI app with metadata for docs
+app = FastAPI(
+    title="Face Recognition API",
+    description="API for face detection, clustering, and search using temporary album workflow",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
-# Initialize FaceSystem
-face_system = FaceSystemCuda(batch_size=16)
+# Add CORS middleware to allow cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
-# Create necessary directories with absolute paths
-UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
-CLUSTER_DIR = os.path.abspath(CLUSTER_DIR)
-ALBUM_DIR = os.path.abspath(ALBUM_DIR)
-PROCESSED_DIR = os.path.join(CLUSTER_DIR, "_processed")  # Directory to track processed albums
-
-for dir_path in [CLUSTER_DIR, UPLOAD_DIR, PROCESSED_DIR]:
+# Create necessary directories
+for dir_path in [TEMP_ALBUM_DIR, ALBUM_DIR, CLUSTER_DIR, RESULTS_DIR]:
+    dir_path = os.path.abspath(dir_path)
     os.makedirs(dir_path, exist_ok=True)
     logger.info(f"Created directory: {dir_path}")
 
 # Mount static files for serving images
 app.mount("/images", StaticFiles(directory=CLUSTER_DIR), name="images")
 app.mount("/album", StaticFiles(directory=ALBUM_DIR), name="album")
+app.mount("/results", StaticFiles(directory=RESULTS_DIR), name="results")
 
-def get_album_hash():
-    """Generate a hash of the album directory contents to track changes."""
-    image_paths = [
-        os.path.join(ALBUM_DIR, f) for f in sorted(os.listdir(ALBUM_DIR))
-        if f.lower().endswith(('.jpg', '.jpeg', '.png'))
-    ]
-    
-    if not image_paths:
-        return None
-        
-    # Create a hash of filenames and modification times
-    hasher = hashlib.md5()
-    for path in image_paths:
-        stat = os.stat(path)
-        file_info = f"{os.path.basename(path)}_{stat.st_size}_{stat.st_mtime}"
-        hasher.update(file_info.encode())
-        
-    return hasher.hexdigest()
+# Initialize FaceSystem
+face_system = FaceSystem(batch_size=16)
 
-def is_album_processed():
-    """Check if the current album has already been processed."""
-    album_hash = get_album_hash()
-    if not album_hash:
-        return False
-        
-    hash_file = os.path.join(PROCESSED_DIR, "album_hash.json")
-    
-    if os.path.exists(hash_file):
-        try:
-            with open(hash_file, 'r') as f:
-                data = json.load(f)
-                return data.get('hash') == album_hash
-        except Exception as e:
-            logger.error(f"Error reading album hash file: {e}")
-    
+# Check for active processing
+def is_processing_active():
+    lock_file = os.path.join(CLUSTER_DIR, "processing.lock")
+    if os.path.exists(lock_file):
+        # Check if the lock is stale (older than 1 hour)
+        lock_time = os.path.getmtime(lock_file)
+        current_time = time.time()
+        if current_time - lock_time > 3600:  # 1 hour in seconds
+            os.remove(lock_file)
+            return False
+        return True
     return False
 
-def mark_album_processed():
-    """Mark the current album as processed."""
-    album_hash = get_album_hash()
-    if not album_hash:
-        return
-        
-    hash_file = os.path.join(PROCESSED_DIR, "album_hash.json")
-    
-    try:
-        with open(hash_file, 'w') as f:
-            json.dump({
-                'hash': album_hash,
-                'timestamp': datetime.now().isoformat(),
-                'image_count': len([f for f in os.listdir(ALBUM_DIR) 
-                                   if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-            }, f, indent=2)
-        logger.info("Marked album as processed")
-    except Exception as e:
-        logger.error(f"Error writing album hash file: {e}")
+# Create processing lock
+def create_processing_lock():
+    lock_file = os.path.join(CLUSTER_DIR, "processing.lock")
+    with open(lock_file, 'w') as f:
+        f.write(datetime.now().isoformat())
+    return lock_file
 
-@app.post("/cluster/")
-async def cluster_images(force: bool = False):
-    """Perform face clustering on images in the album directory."""
+# Release processing lock
+def release_processing_lock():
+    lock_file = os.path.join(CLUSTER_DIR, "processing.lock")
+    if os.path.exists(lock_file):
+        os.remove(lock_file)
+
+@app.get("/")
+async def root():
+    """Root endpoint that provides API information."""
+    return {
+        "name": "Face Recognition API",
+        "version": "1.0.0",
+        "status": "running",
+        "endpoints": {
+            "health": "/health",
+            "status": "/status",
+            "process": "/process",
+            "search": "/search",
+            "clear-temp-album": "/clear-temp-album",
+            "documentation": "/docs"
+        }
+    }
+
+@app.post("/process/", status_code=status.HTTP_202_ACCEPTED)
+async def process_images(background_tasks: BackgroundTasks, force: bool = False):
+    """
+    Process images from temp_album, add to clusters, and copy to permanent album.
+    
+    - **force**: Override processing lock if one exists
+    
+    Returns:
+        JSON response with processing status
+    """
     try:
-        # Check if album directory exists and contains images
-        if not os.path.exists(ALBUM_DIR):
+        # Check if processing is already in progress
+        if is_processing_active() and not force:
+            return JSONResponse({
+                "status": "error",
+                "code": "PROCESSING_IN_PROGRESS",
+                "message": "Image processing is already in progress. Please try again later or use force=true."
+            }, status_code=status.HTTP_409_CONFLICT)
+        
+        # Check for images in temp_album directory
+        if not os.path.exists(TEMP_ALBUM_DIR):
             return JSONResponse({
                 "status": "error",
                 "code": "DIRECTORY_NOT_FOUND",
-                "message": f"Album directory not found: {ALBUM_DIR}"
-            }, status_code=400)
-
-        # Get all image paths
-        image_paths = [
-            os.path.join(ALBUM_DIR, f) for f in os.listdir(ALBUM_DIR)
+                "message": f"Temporary album directory not found: {TEMP_ALBUM_DIR}"
+            }, status_code=status.HTTP_400_BAD_REQUEST)
+        
+        image_files = [
+            f for f in os.listdir(TEMP_ALBUM_DIR)
             if f.lower().endswith(('.jpg', '.jpeg', '.png'))
         ]
         
-        if not image_paths:
+        if not image_files:
             return JSONResponse({
                 "status": "error",
                 "code": "NO_IMAGES_FOUND",
-                "message": f"No images found in {ALBUM_DIR}"
-            }, status_code=400)
+                "message": f"No images found in {TEMP_ALBUM_DIR}"
+            }, status_code=status.HTTP_400_BAD_REQUEST)
         
-        # Check if album has already been processed and 'force' is not set
-        if not force and is_album_processed():
-            return JSONResponse({
-                "status": "success",
-                "code": "ALREADY_PROCESSED",
-                "message": "This album has already been processed. Use force=true to reprocess.",
-                "details": {
-                    "clusters_directory": CLUSTER_DIR
-                }
-            })
-            
-        # Check for existing clustering process
-        lock_file = os.path.join(CLUSTER_DIR, "clustering.lock")
-        if os.path.exists(lock_file):
-            # Check if the lock is stale (more than 1 hour old)
-            lock_age = datetime.now().timestamp() - os.path.getmtime(lock_file)
-            if lock_age < 3600:  # 1 hour in seconds
-                return JSONResponse({
-                    "status": "error",
-                    "code": "CLUSTERING_IN_PROGRESS",
-                    "message": "Clustering process is already running. Please wait."
-                }, status_code=409)  # 409 Conflict
-            else:
-                # Lock is stale, remove it
-                os.remove(lock_file)
-                logger.info("Removed stale clustering lock file")
-
-        # Create lock file
-        try:
-            with open(lock_file, 'w') as f:
-                f.write(f"Started clustering at {datetime.now().isoformat()}")
-            logger.info("Created clustering lock file")
-        except Exception as e:
-            logger.error(f"Error creating lock file: {e}")
-            # Continue anyway
-            
-        logger.info(f"Found {len(image_paths)} images to process")
-            
-        try:
-            # Process images in batches
-            all_faces = []
-            for i in range(0, len(image_paths), face_system.batch_size):
-                batch = image_paths[i:i + face_system.batch_size]
-                faces = face_system.process_image_batch(batch)
-                all_faces.extend(faces)
-                logger.info(f"Processed {min(i + face_system.batch_size, len(image_paths))}/{len(image_paths)} images...")
-            
-            # Perform clustering
-            logger.info("Clustering faces...")
-            labels = face_system.cluster_faces(all_faces)
-            
-            # Save results
-            logger.info("Saving clustered results...")
-            face_system.save_clusters(all_faces, labels, CLUSTER_DIR)
-            
-            unique_people = len(set(labels) - {-1})
-            total_faces = len(all_faces)
-            
-            # Mark album as processed
-            mark_album_processed()
-            
-            return JSONResponse({
-                "status": "success",
-                "code": "CLUSTERING_COMPLETE",
-                "message": f"Successfully clustered faces",
-                "details": {
-                    "unique_people": unique_people,
-                    "total_faces": total_faces,
-                    "clusters_directory": CLUSTER_DIR
-                }
-            })
-            
-        finally:
-            # Always remove the lock file when done or if an error occurs
-            if os.path.exists(lock_file):
-                os.remove(lock_file)
-                logger.info("Removed clustering lock file")
+        # Create processing lock
+        lock_file = create_processing_lock()
         
+        # Define background processing function
+        def process_in_background():
+            try:
+                logger.info(f"Starting background processing of {len(image_files)} images...")
+                result = process_temp_album(
+                    temp_album_dir=TEMP_ALBUM_DIR,
+                    cluster_dir=CLUSTER_DIR,
+                    album_dir=ALBUM_DIR,
+                    batch_size=16
+                )
+                logger.info(f"Background processing completed: {result}")
+            except Exception as e:
+                logger.error(f"Error in background processing: {e}")
+                logger.exception("Detailed error:")
+            finally:
+                release_processing_lock()
+                logger.info("Processing lock released")
+        
+        # Start background processing
+        background_tasks.add_task(process_in_background)
+        
+        # Return immediate response
+        return JSONResponse({
+            "status": "success",
+            "code": "PROCESSING_STARTED",
+            "message": "Image processing started in the background. Check status endpoint for updates.",
+            "details": {
+                "images_to_process": len(image_files)
+            }
+        })
     except Exception as e:
-        logger.error(f"Error in clustering: {str(e)}")
-        # Make sure to remove lock file if it exists
-        lock_file = os.path.join(CLUSTER_DIR, "clustering.lock")
-        if os.path.exists(lock_file):
-            os.remove(lock_file)
-            logger.info("Removed clustering lock file after error")
-            
+        logger.error(f"Error in processing: {str(e)}")
+        logger.exception("Detailed error:")
+        # Make sure to release the lock in case of error
+        release_processing_lock()
         return JSONResponse({
             "status": "error",
-            "code": "CLUSTERING_ERROR",
+            "code": "SYSTEM_ERROR",
             "message": str(e)
-        }, status_code=500)
+        }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+@app.get("/status/")
+async def check_processing_status():
+    """
+    Check the status of the processing job and cluster statistics.
+    
+    Returns:
+        JSON with processing status and statistics
+    """
+    try:
+        # Check if processing is active
+        processing_active = is_processing_active()
+        
+        # Check if clusters are available
+        clusters_available = os.path.exists(os.path.join(CLUSTER_DIR, "representatives.json"))
+        
+        # Get processing stats if available
+        stats = {}
+        manifest_path = os.path.join(CLUSTER_DIR, "manifest.json")
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, 'r') as f:
+                    stats = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading manifest: {str(e)}")
+        
+        # Get image counts
+        temp_image_count = len([f for f in os.listdir(TEMP_ALBUM_DIR) 
+                              if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+        
+        album_image_count = len([f for f in os.listdir(ALBUM_DIR) 
+                              if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+        
+        return {
+            "processing_active": processing_active,
+            "clusters_available": clusters_available,
+            "temp_album_image_count": temp_image_count,
+            "album_image_count": album_image_count,
+            "stats": stats
+        }
+    
+    except Exception as e:
+        logger.error(f"Error checking status: {str(e)}")
+        logger.exception("Detailed error:")
+        return JSONResponse({
+            "status": "error",
+            "message": str(e)
+        }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @app.post("/search/")
-async def search_face(file: UploadFile = File(...), threshold: float = 0.83):
-    """Search for matching faces in clustered results."""
+async def search_face(
+    file: UploadFile = File(...), 
+    threshold: float = Query(0.83, ge=0.5, le=1.0, description="Similarity threshold (0.5-1.0)")
+):
+    """
+    Search for matching faces in the clustered results.
+    
+    - **file**: Image file containing a face to search for
+    - **threshold**: Similarity threshold (0.5-1.0)
+    
+    Returns:
+        JSON with matching faces found in the clusters
+    """
+    temp_file = None
     try:
-        # Check if clustering has been done
-        if not os.path.exists(CLUSTER_DIR) or not os.listdir(CLUSTER_DIR):
+        # Check if clusters are available
+        if not os.path.exists(os.path.join(CLUSTER_DIR, "representatives.json")):
             return JSONResponse({
                 "status": "error",
                 "code": "NO_CLUSTERS_FOUND",
-                "message": "No clustered faces available. Please run clustering first."
-            }, status_code=400)
-
-        # Create a unique filename for the query image
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"query_{timestamp}_{os.urandom(4).hex()}.jpg"
-        query_path = os.path.join(UPLOAD_DIR, filename)
+                "message": "No clustered faces available. Please process images first."
+            }, status_code=status.HTTP_400_BAD_REQUEST)
         
-        # Ensure the uploads directory exists
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        # Create temp directory if it doesn't exist
+        temp_dir = os.path.join(os.getcwd(), "temp_search")
+        os.makedirs(temp_dir, exist_ok=True)
         
-        # Save the uploaded file
-        logger.info(f"Saving query image to: {query_path}")
-        with open(query_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # Save the uploaded file with a unique name in our own temp directory
+        file_content = await file.read()
+        temp_filename = f"search_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}.jpg"
+        temp_file_path = os.path.join(temp_dir, temp_filename)
         
-        if not os.path.exists(query_path):
-            raise FileNotFoundError(f"Failed to save file to {query_path}")
-            
-        # Load query image
-        query_img = cv2.imread(query_path)
+        with open(temp_file_path, "wb") as f:
+            f.write(file_content)
+        
+        # Load and convert the image
+        query_img = cv2.imread(temp_file_path)
         if query_img is None:
             return JSONResponse({
                 "status": "error",
                 "code": "INVALID_IMAGE",
                 "message": "Could not read the uploaded image"
-            }, status_code=400)
-            
-        query_img = cv2.cvtColor(query_img, cv2.COLOR_BGR2RGB)
+            }, status_code=status.HTTP_400_BAD_REQUEST)
+        
+        # Release the file handle by explicitly closing the image
+        query_img_rgb = cv2.cvtColor(query_img, cv2.COLOR_BGR2RGB)
         
         # Load representative faces if not already loaded
         if not face_system.representative_faces:
@@ -262,10 +286,15 @@ async def search_face(file: UploadFile = File(...), threshold: float = 0.83):
                     "status": "error",
                     "code": "LOADING_ERROR",
                     "message": "Failed to load representative faces"
-                }, status_code=500)
+                }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         # Perform search
-        results = face_system.find_matching_faces(query_img, CLUSTER_DIR, threshold)
+        results = face_system.find_matching_faces(
+            query_image=query_img_rgb,
+            clustered_dir=CLUSTER_DIR,
+            album_dir=ALBUM_DIR,
+            similarity_threshold=threshold
+        )
         
         if results['status'] == 'success':
             if not results['matches']:
@@ -275,8 +304,8 @@ async def search_face(file: UploadFile = File(...), threshold: float = 0.83):
                     "message": "No matching faces were found above the similarity threshold.",
                     "matches": []
                 })
-
-            # Process matches
+            
+            # Process matches to add proper URLs
             processed_matches = []
             for match in results['matches']:
                 person_id = int(match['person_id'])
@@ -297,56 +326,139 @@ async def search_face(file: UploadFile = File(...), threshold: float = 0.83):
                     'representative_url': f"{BASE_URL}/images/person_{person_id}/representative.jpg"
                 }
                 processed_matches.append(processed_match)
-                
+            
             return JSONResponse({
                 "status": "success",
                 "code": "MATCHES_FOUND",
                 "message": f"Found {len(processed_matches)} matching persons",
                 "matches": processed_matches
             })
-            
+        
         else:
             return JSONResponse({
                 "status": "error",
                 "code": "SEARCH_ERROR",
                 "message": results['message'],
                 "matches": []
-            }, status_code=400)
-            
+            }, status_code=status.HTTP_400_BAD_REQUEST)
+    
     except Exception as e:
         logger.error(f"Error in face search: {str(e)}")
+        logger.exception("Detailed error:")
         return JSONResponse({
             "status": "error",
             "code": "SYSTEM_ERROR",
             "message": str(e),
             "matches": []
-        }, status_code=500)
+        }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     finally:
-        # Cleanup: remove the temporary query image
+        # Try to clean up the temporary file
         try:
-            if 'query_path' in locals() and os.path.exists(query_path):
-                os.remove(query_path)
-                logger.info(f"Cleaned up temporary file: {query_path}")
-        except Exception as cleanup_error:
-            logger.error(f"Error cleaning up temporary file: {str(cleanup_error)}")
-
+            if temp_file and os.path.exists(temp_file):
+                os.remove(temp_file)
+        except Exception as e:
+            # Just log the error but don't fail the request
+            logger.warning(f"Could not remove temporary file: {str(e)}")
+            
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    # Check if clustering is in progress
-    lock_file = os.path.join(CLUSTER_DIR, "clustering.lock")
-    clustering_in_progress = os.path.exists(lock_file)
+    """
+    Health check endpoint to verify API is running and check directory status.
     
-    # Check if album has been processed
-    album_processed = is_album_processed()
-    
+    Returns:
+        JSON with health information
+    """
     return {
         "status": "healthy",
+        "temp_album_dir": TEMP_ALBUM_DIR,
         "album_dir": ALBUM_DIR,
         "cluster_dir": CLUSTER_DIR,
-        "clustering_in_progress": clustering_in_progress,
-        "album_processed": album_processed
+        "processing_active": is_processing_active(),
+        "temp_album_image_count": len([f for f in os.listdir(TEMP_ALBUM_DIR) 
+                               if f.lower().endswith(('.jpg', '.jpeg', '.png'))]),
+        "album_image_count": len([f for f in os.listdir(ALBUM_DIR) 
+                             if f.lower().endswith(('.jpg', '.jpeg', '.png'))]),
+        "clusters_available": os.path.exists(os.path.join(CLUSTER_DIR, "representatives.json"))
     }
 
+@app.get("/clear-temp-album")
+async def clear_temp_album(force: bool = False):
+    """
+    Clear all files from the temporary album directory.
+    
+    - **force**: Force clearing even if processing is active
+    
+    Returns:
+        JSON response with clear operation status
+    """
+    try:
+        # Safety check - if processing is active, don't clear unless forced
+        if is_processing_active() and not force:
+            return JSONResponse({
+                "status": "error",
+                "code": "PROCESSING_IN_PROGRESS",
+                "message": "Processing is active. Use force=true to clear anyway."
+            }, status_code=status.HTTP_409_CONFLICT)
+        
+        # Count files before clearing
+        image_count = len([f for f in os.listdir(TEMP_ALBUM_DIR) 
+                        if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+        
+        # Clear the directory
+        clear_temp_folder(TEMP_ALBUM_DIR)
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Cleared {image_count} files from temporary album directory."
+        })
+    except Exception as e:
+        logger.error(f"Error clearing temp album: {str(e)}")
+        logger.exception("Detailed error:")
+        return JSONResponse({
+            "status": "error",
+            "message": str(e)
+        }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# Add a test upload endpoint for placing files directly in temp_album
+@app.post("/upload-to-temp/")
+async def upload_to_temp(file: UploadFile = File(...)):
+    """
+    Upload an image directly to the temp_album directory for testing.
+    
+    - **file**: Image file to upload to temp_album
+    
+    Returns:
+        JSON response with upload status
+    """
+    try:
+        # Ensure temp_album directory exists
+        os.makedirs(TEMP_ALBUM_DIR, exist_ok=True)
+        
+        # Generate a unique filename
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
+        file_path = os.path.join(TEMP_ALBUM_DIR, filename)
+        
+        # Save the file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"File {filename} uploaded to temp_album",
+            "file_path": file_path
+        })
+    except Exception as e:
+        logger.error(f"Error uploading file: {str(e)}")
+        logger.exception("Detailed error:")
+        return JSONResponse({
+            "status": "error",
+            "message": str(e)
+        }, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Create required directories at startup
+    for dir_path in [TEMP_ALBUM_DIR, ALBUM_DIR, CLUSTER_DIR, RESULTS_DIR]:
+        os.makedirs(os.path.abspath(dir_path), exist_ok=True)
+    
+    # Start the API server
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
