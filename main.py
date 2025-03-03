@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # API Configuration
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+BASE_URL = os.getenv("BASE_URL", "https://top.innotech.com.la:8000")
 TEMP_ALBUM_DIR = os.getenv("TEMP_ALBUM_DIR", "temp_album")  # Temporary folder for uploads
 ALBUM_DIR = os.getenv("ALBUM_DIR", "album")                 # Permanent storage for original images
 CLUSTER_DIR = os.getenv("CLUSTER_DIR", "clustered_faces")   # Storage for face clusters
@@ -461,4 +461,4 @@ if __name__ == "__main__":
         os.makedirs(os.path.abspath(dir_path), exist_ok=True)
     
     # Start the API server
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0",ssl_keyfile="\\\\str.innotech.com.la\\Storage\\Temp\ssl\\privkey.pem", ssl_certfile="\\\\str.innotech.com.la\\Storage\\Temp\\ssl\\fullchain.pem" , port=8000, reload=False)
