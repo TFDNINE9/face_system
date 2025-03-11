@@ -1,18 +1,19 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, BackgroundTasks, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import shutil
 import os
 import cv2
-import numpy as np
 from datetime import datetime
 import logging
 import json
-import tempfile
 import time
 from face_system import FaceSystem, process_temp_album, clear_temp_folder
+from PIL import Image
+from starlette.responses import StreamingResponse
+import io
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 # API Configuration
 BASE_URL = os.getenv("BASE_URL", "https://top.innotech.com.la:8000")
 TEMP_ALBUM_DIR = os.getenv("TEMP_ALBUM_DIR", "temp_album")
-ALBUM_DIR = os.getenv("ALBUM_DIR", "album")
+ALBUM_DIR = os.getenv("ALBUM_DIR", "album")  # Real directory, kept private
 CLUSTER_DIR = os.getenv("CLUSTER_DIR", "clustered_faces")
 RESULTS_DIR = os.getenv("RESULTS_DIR", "face_search_results")
 
@@ -49,10 +50,10 @@ for dir_path in [TEMP_ALBUM_DIR, ALBUM_DIR, CLUSTER_DIR, RESULTS_DIR]:
     os.makedirs(dir_path, exist_ok=True)
     logger.info(f"Created directory: {dir_path}")
 
-# Mount static files
+# Mount static files (only for clusters and results, not album)
 app.mount("/images", StaticFiles(directory=CLUSTER_DIR), name="images")
-app.mount("/album", StaticFiles(directory=ALBUM_DIR), name="album")
 app.mount("/results", StaticFiles(directory=RESULTS_DIR), name="results")
+# Removed: app.mount("/album", StaticFiles(directory=ALBUM_DIR), name="album")
 
 # Initialize FaceSystem
 face_system = FaceSystem(batch_size=16)
@@ -272,7 +273,7 @@ async def search_face(file: UploadFile = File(...), threshold: float = Query(0.8
             for match in results['matches']:
                 person_id = int(match['person_id'])
                 source_file_urls = [
-                    {"filename": str(source_file), "face_url": f"{BASE_URL}/album/{source_file}"}
+                    {"filename": str(source_file), "face_url": f"{BASE_URL}/photo/{source_file}"}
                     for source_file in match['source_files']
                 ]
                 processed_matches.append({
@@ -366,6 +367,130 @@ async def clear_temp_album(force: bool = False):
             message=str(e),
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@app.get("/person/{person_id}")
+async def get_person_details(person_id: int):
+    """Get details for a specific person by ID."""
+    try:
+        # Check if the person exists
+        person_dir = os.path.join(CLUSTER_DIR, f"person_{person_id}")
+        if not os.path.exists(person_dir):
+            return create_response(
+                status="error",
+                code="PERSON_NOT_FOUND",
+                message=f"Person ID {person_id} not found",
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get representative face URL
+        representative_url = f"{BASE_URL}/images/person_{person_id}/representative.jpg"
+        
+        # Read sources file to get source images
+        sources_path = os.path.join(person_dir, "sources.txt")
+        source_files = []
+        
+        if os.path.exists(sources_path):
+            with open(sources_path, 'r') as f:
+                sources = f.read().splitlines()
+                
+            # Create source file objects
+            for source in sources:
+                source = source.strip()
+                if source:
+                    source_files.append({
+                        "filename": source,
+                        "face_url": f"{BASE_URL}/photo/{source}",
+                        "face_url_thumbnail": f"{BASE_URL}/thumbnail/{source}"
+                    })
+        
+        # Get face variants (if they exist)
+        face_variants = []
+        for i in range(50):  # Check up to 50 face variants
+            face_path = os.path.join(person_dir, f"face_{i}.jpg")
+            if os.path.exists(face_path):
+                face_variants.append({
+                    "index": i,
+                    "url": f"{BASE_URL}/images/person_{person_id}/face_{i}.jpg"
+                })
+            elif i > 0 and not os.path.exists(os.path.join(person_dir, f"face_{i+1}.jpg")):
+                # If this face doesn't exist and neither does the next one, we've likely reached the end
+                break
+        
+        # Get person data from representatives.json if it exists
+        rep_file = os.path.join(CLUSTER_DIR, "representatives.json")
+        extra_info = {}
+        
+        if os.path.exists(rep_file):
+            try:
+                with open(rep_file, 'r') as f:
+                    rep_info = json.load(f)
+                    
+                # If this person is in the representatives file, get additional info
+                if str(person_id) in rep_info:
+                    person_info = rep_info[str(person_id)]
+                    extra_info = {
+                        "original_image": person_info.get("original_image", ""),
+                        "total_source_files": len(person_info.get("source_files", [])),
+                        "creation_date": os.path.getctime(person_dir)
+                    }
+            except Exception as e:
+                logger.error(f"Error reading representatives file: {e}")
+        
+        # Return complete person data
+        return create_response(
+            status="success",
+            code="PERSON_FOUND",
+            message=f"Person {person_id} details retrieved successfully",
+            details={
+                "person_id": person_id,
+                "representative_url": representative_url,
+                "source_files": source_files,
+                "face_variants": face_variants,
+                "extra_info": extra_info
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error retrieving person details: {str(e)}")
+        return create_response(
+            status="error",
+            code="SYSTEM_ERROR",
+            message=str(e),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.get("/thumbnail/{filename}")
+async def get_thumbnail(filename: str, size: int = 256):
+    file_path = os.path.join(ALBUM_DIR, filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
+    
+    try:
+        with Image.open(file_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((size, size))
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format="PNG")
+            img_byte_arr.seek(0)
+            return StreamingResponse(img_byte_arr, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+
+@app.get("/photo/{source}")
+async def get_photo(source: str):
+    """Serve an image file from ALBUM_DIR securely."""
+    # Sanitize the source to prevent directory traversal
+    source = os.path.basename(source)
+    file_path = os.path.join(ALBUM_DIR, source)
+    
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail=f"Photo '{source}' not found")
+    
+    try:
+        return FileResponse(file_path, media_type="image/jpeg")  # Adjust media_type if needed
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error serving photo: {str(e)}")
 
 @app.post("/upload-to-temp/")
 async def upload_to_temp(file: UploadFile = File(...)):
