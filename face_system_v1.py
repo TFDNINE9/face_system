@@ -48,7 +48,7 @@ class FaceSystemConfig:
         }
 
 
-class FaceSystemv1:
+class FaceSystem:
     def __init__(self, config: Optional[FaceSystemConfig] = None):
         try:
             # Use provided config or create default
@@ -833,7 +833,7 @@ def process_temp_album(temp_album_dir: str, cluster_dir: str, album_dir: str, ba
         start_time = time.time()
         
         # Initialize face system
-        face_system = FaceSystemv1()
+        face_system = FaceSystem()
         
         # Load existing representatives if available
         existing_representatives = {}
