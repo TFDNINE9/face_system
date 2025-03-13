@@ -701,7 +701,7 @@ class DatabaseFaceSystem:
             
             cursor.execute(
                 """
-                SELECT c.cluster_id, f.face_id, f.embedding_path, f.face_path
+                SELECT c.cluster_id, c.total_faces, f.face_id, f.embedding_path, f.face_path
                 FROM clusters c
                 JOIN faces f ON c.representative_face_id = f.face_id
                 WHERE c.event_id = ?
@@ -712,14 +712,32 @@ class DatabaseFaceSystem:
             row = cursor.fetchone()
             while row:
                 cluster_id = row[0]
-                face_id = row[1]
-                embedding_path = row[2]
-                face_path = row[3]
+                total_faces = row[1] or 0
+                face_id = row[2]
+                embedding_path = row[3]  # Fixed order
+                face_path = row[4]       # Fixed order
                 
                 try:
+                    # Check if paths exist
+                    if not os.path.exists(embedding_path):
+                        logger.warning(f"Embedding path not found: {embedding_path}")
+                        row = cursor.fetchone()
+                        continue
+                    
+                    if not os.path.exists(face_path):
+                        logger.warning(f"Face path not found: {face_path}")
+                        row = cursor.fetchone()
+                        continue
+                    
                     # Load the embedding and face image
                     embedding = np.load(embedding_path)
                     face_image = cv2.imread(face_path)
+                    
+                    if face_image is None:
+                        logger.warning(f"Failed to read image: {face_path}")
+                        row = cursor.fetchone()
+                        continue
+                        
                     face_image_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
                     
                     existing_clusters[cluster_id] = {
@@ -727,7 +745,8 @@ class DatabaseFaceSystem:
                         'embedding': embedding,
                         'face_image': face_image_rgb,
                         'embedding_path': embedding_path,
-                        'face_path': face_path
+                        'face_path': face_path,
+                        'total_faces': total_faces
                     }
                 except Exception as e:
                     logger.error(f"Error loading representative for cluster {cluster_id}: {str(e)}")
@@ -920,6 +939,8 @@ class DatabaseFaceSystem:
                 
                 # If existing cluster, update total_faces count
                 if is_existing:
+                    # Safely get total_faces with a default of 0
+                    existing_total_faces = existing_clusters.get(cluster_id, {}).get('total_faces', 0)
                     cursor.execute(
                         """
                         UPDATE clusters
@@ -958,16 +979,15 @@ class DatabaseFaceSystem:
                     )
                 
                 conn.commit()
-                
-                # Add to cluster info results
+                   
                 cluster_info.append({
                     'cluster_id': cluster_id,
                     'representative_id': rep_face_id,
                     'representative_path': rep_face_path,
-                    'total_faces': len(cluster_faces) + (existing_clusters[cluster_id]['total_faces'] if is_existing else 0),
+                    'total_faces': len(cluster_faces) + existing_total_faces,
                     'is_new': not is_existing
                 })
-            
+                
             cursor.close()
             conn.close()
             
