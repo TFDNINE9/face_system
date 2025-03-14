@@ -3,6 +3,7 @@ venv_cuda/
 env/
 .env/
 .venv/
+.env
 
 # Cached Python bytecode
 __pycache__/
