@@ -296,9 +296,7 @@ def get_resized_photo_path(event_id: str, photo_id: str, size: int):
                 width, height = img.size
                 new_height = int((size / width) * height)
                 
-
                 resized_img = img.resize((size, new_height), Image.Resampling.LANCZOS)
-                
          
                 resized_img.save(resized_path, quality=90)
                 

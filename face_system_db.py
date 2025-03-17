@@ -887,18 +887,6 @@ class DatabaseFaceSystem:
             raise
     
     def _save_clusters_to_db(self, final_clusters, new_faces, existing_clusters, event_id):
-        """
-        Save clustering results to the database.
-        
-        Args:
-            final_clusters: Dictionary mapping cluster IDs to lists of face indices
-            new_faces: List of face dictionaries
-            existing_clusters: Dictionary of existing clusters
-            event_id: UUID of the event
-            
-        Returns:
-            List of cluster info dictionaries
-        """
         try:
             conn = self.get_db_connection()
             cursor = conn.cursor()
@@ -916,10 +904,15 @@ class DatabaseFaceSystem:
                 # Determine if this is an existing cluster
                 is_existing = cluster_id in existing_clusters
                 
+                # Initialize existing_total_faces with a default of 0
+                existing_total_faces = 0
+                
                 # Select or create representative face
                 if is_existing:
                     rep_face_id = existing_clusters[cluster_id]['face_id']
                     rep_face_path = existing_clusters[cluster_id]['face_path']
+                    # Update existing_total_faces for existing clusters
+                    existing_total_faces = existing_clusters.get(cluster_id, {}).get('total_faces', 0)
                 else:
                     # Create a new cluster
                     best_face = self._select_best_representative(cluster_faces)
@@ -939,8 +932,6 @@ class DatabaseFaceSystem:
                 
                 # If existing cluster, update total_faces count
                 if is_existing:
-                    # Safely get total_faces with a default of 0
-                    existing_total_faces = existing_clusters.get(cluster_id, {}).get('total_faces', 0)
                     cursor.execute(
                         """
                         UPDATE clusters
@@ -979,7 +970,7 @@ class DatabaseFaceSystem:
                     )
                 
                 conn.commit()
-                   
+                
                 cluster_info.append({
                     'cluster_id': cluster_id,
                     'representative_id': rep_face_id,

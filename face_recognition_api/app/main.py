@@ -5,10 +5,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
-
 from .config import settings
 from .api.routes import api_router
 from .utils import create_response
+from fastapi import HTTPException
 
 # Configure logging
 logging.basicConfig(
@@ -54,12 +54,17 @@ def create_app() -> FastAPI:
   
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
+        if isinstance(exc, HTTPException):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail}
+            )
         logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={"detail": "An unexpected error occurred"}
         )
-    
+        
     return app
 
 

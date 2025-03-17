@@ -14,16 +14,15 @@ db_face_system = DatabaseFaceSystem(
 
 @contextmanager
 def get_db_connection():
-  
     conn = None
     try:
         conn = pyodbc.connect(settings.DB_CONNECTION_STRING)
         yield conn
-    except Exception as e:
-        logger.error(f"Database connection failed: {str(e)}")
+    except pyodbc.Error as e:
+        logger.error(f"Database error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database connection error"
+            detail=f"Database error: {str(e)}"
         )
     finally:
         if conn is not None:

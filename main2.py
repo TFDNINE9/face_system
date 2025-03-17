@@ -521,12 +521,12 @@ async def upload_to_temp(file: UploadFile = File(...)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-if __name__ == "__main__":
+if __name__ == "__main2__":
     for dir_path in [TEMP_ALBUM_DIR, ALBUM_DIR, CLUSTER_DIR, RESULTS_DIR]:
         os.makedirs(os.path.abspath(dir_path), exist_ok=True)
     
     uvicorn.run(
-        "main:app",
+        "main2:app",
         host="0.0.0.0",
         ssl_keyfile="\\\\str.innotech.com.la\\Storage\\Temp\\ssl\\privkey.pem",
         ssl_certfile="\\\\str.innotech.com.la\\Storage\\Temp\\ssl\\fullchain.pem",

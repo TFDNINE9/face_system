@@ -5,8 +5,8 @@ from ..services.event import (
     get_all_events,
     get_events_by_customer,
     get_event,
-    create_event,
-    update_event,
+    create_event as create_event_service,
+    update_event as update_event_service,
     delete_event
 )
 from ..utils import create_response
@@ -36,14 +36,12 @@ async def get_event_by_id(
     event_data = get_event(event_id)
     return create_response(body=event_data)
 
-@router.post("/", response_model=EventResponse, status_code=status.HTTP_201_CREATED,  dependencies=[Depends(verify_api_key)])
-async def create_event(
+@router.post("/", response_model=EventResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_api_key)])
+def create_event(
     event_data: EventCreate
 ):
-    new_event = create_event(event_data)
-    
-    headers = {"Location" :f"{settings.BASE_URL}/events/{new_event['event_id']}"}
-    
+    new_event = create_event_service(event_data)
+    headers = {"Location": f"{settings.BASE_URL}/events/{new_event['event_id']}"}
     return create_response(
         headers=headers,
         body=new_event,
@@ -55,7 +53,7 @@ async def update_event(
       event_data: EventUpdate,
     event_id: str = Path(..., description="The ID of the event")
 ):
-    updated_event = update_event(event_id, event_data)
+    updated_event = update_event_service(event_id, event_data)
     return create_response(
         body=updated_event
     )
