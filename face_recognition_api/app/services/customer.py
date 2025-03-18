@@ -3,10 +3,17 @@ import uuid
 from fastapi import HTTPException, status
 from ..database import get_db_connection
 from ..schemas.customer import CustomerCreate, CustomerUpdate
+from .error_handling import (
+    handle_service_error, 
+    NotFoundError, 
+    DatabaseError,
+    ValidationError
+)
 
 logger = logging.getLogger(__name__)
 
-def get_all_customers():
+@handle_service_error
+async def get_all_customers():
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -27,17 +34,21 @@ def get_all_customers():
             
             return customers
     
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Can't get customers: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve customers: {str(e)}"
-        )
+        logger.error(f"Error retrieving customers: {str(e)}", exc_info=True)
+        raise DatabaseError(f"Failed to retrieve customers: {str(e)}", original_error=e)
 
-def get_customer(customer_id: str):
+@handle_service_error
+async def get_customer(customer_id: str):
     try:
+        try:
+            uuid.UUID(customer_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid customer ID format: {customer_id}. Must be a valid UUID",
+                details={"field": "customer_id", "value": customer_id}
+            )
+        
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
@@ -49,10 +60,7 @@ def get_customer(customer_id: str):
             row = cursor.fetchone()
             
             if not row:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Customer not found"
-                )
+                raise NotFoundError("Customer", customer_id)
                 
             customer = {
                 "id": str(row[0]).lower(),
@@ -64,21 +72,30 @@ def get_customer(customer_id: str):
             
             return customer
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error retrieving customer: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve customer: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to retrieve customer: {str(e)}", original_error=e)
 
-def create_customer(customer: CustomerCreate):
+@handle_service_error
+async def create_customer(customer: CustomerCreate):
     try:
         customer_id = str(uuid.uuid4())
         
         with get_db_connection() as conn:
             cursor = conn.cursor()
+
+            if customer.email:
+                cursor.execute(
+                    "SELECT 1 FROM customers WHERE email = ?",
+                    (customer.email,)
+                )
+                if cursor.fetchone():
+                    raise ValidationError(
+                        f"Customer with email {customer.email} already exists",
+                        details={"field": "email", "value": customer.email}
+                    )
             
             cursor.execute(
                 """INSERT INTO customers (customer_id, name, email, phone) 
@@ -96,33 +113,46 @@ def create_customer(customer: CustomerCreate):
             "created_at": None 
         }
         
-    except HTTPException:
+    except ValidationError:
         raise
     except Exception as e:
         logger.error(f"Error creating customer: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create customer: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to create customer: {str(e)}", original_error=e)
 
-def update_customer(customer_id: str, customer: CustomerUpdate):
+@handle_service_error
+async def update_customer(customer_id: str, customer: CustomerUpdate):
     try:
+        try:
+            uuid.UUID(customer_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid customer ID format: {customer_id}. Must be a valid UUID",
+                details={"field": "customer_id", "value": customer_id}
+            )
+        
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # First check if the customer exists
             cursor.execute(
                 "SELECT customer_id FROM customers WHERE customer_id = ?", 
                 (customer_id,)
             )
             
             if not cursor.fetchone():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Customer not found"
-                )
+                raise NotFoundError("Customer", customer_id)
             
-            # Update the customer
+            if customer.email:
+                cursor.execute(
+                    "SELECT customer_id FROM customers WHERE email = ? AND customer_id != ?",
+                    (customer.email, customer_id)
+                )
+                if cursor.fetchone():
+                    raise ValidationError(
+                        f"Customer with email {customer.email} already exists",
+                        details={"field": "email", "value": customer.email}
+                    )
+            
+            
             cursor.execute(
                 """UPDATE customers 
                    SET name = ?, email = ?, phone = ? 
@@ -131,14 +161,11 @@ def update_customer(customer_id: str, customer: CustomerUpdate):
             )
             
             if cursor.rowcount == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to update customer"
-                )
+                raise DatabaseError("Failed to update customer - no rows affected")
                 
             conn.commit()
             
-            # Get the updated customer to return
+            
             cursor.execute(
                 "SELECT customer_id, name, email, phone, created_at FROM customers WHERE customer_id = ?", 
                 (customer_id,)
@@ -156,33 +183,46 @@ def update_customer(customer_id: str, customer: CustomerUpdate):
             
             return updated_customer
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error updating customer: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update customer: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to update customer: {str(e)}", original_error=e)
 
-def delete_customer(customer_id: str):
+@handle_service_error
+async def delete_customer(customer_id: str):
     try:
+        
+        try:
+            uuid.UUID(customer_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid customer ID format: {customer_id}. Must be a valid UUID",
+                details={"field": "customer_id", "value": customer_id}
+            )
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            
-            # First check if the customer exists
+
             cursor.execute(
                 "SELECT customer_id FROM customers WHERE customer_id = ?", 
                 (customer_id,)
             )
             
             if not cursor.fetchone():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Customer not found"
-                )
+                raise NotFoundError("Customer", customer_id)
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM events WHERE customer_id = ?",
+                (customer_id,)
+            )
             
-            # Delete the customer
+            event_count = cursor.fetchone()[0]
+            if event_count > 0:
+                raise ValidationError(
+                    f"Cannot delete customer with {event_count} associated events",
+                    details={"related_events": event_count}
+                )
+
             cursor.execute(
                 "DELETE FROM customers WHERE customer_id = ?", 
                 (customer_id,)
@@ -190,11 +230,8 @@ def delete_customer(customer_id: str):
             
             conn.commit()
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error deleting customer: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete customer: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to delete customer: {str(e)}", original_error=e)

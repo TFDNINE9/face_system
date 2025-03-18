@@ -3,15 +3,40 @@ import uuid
 import os
 import math
 from PIL import Image
-from fastapi import HTTPException, UploadFile, status
-from ..database import get_db_connection
+from fastapi import UploadFile, status
+from ..database import get_db_connection, get_db_transaction
 from ..config import settings
+from .error_handling import (
+    handle_service_error,
+    NotFoundError,
+    ValidationError,
+    DatabaseError
+)
 
 logger = logging.getLogger(__name__)
 
+@handle_service_error
 def get_event_photos(event_id: str, page: int = 1, page_size: int = 20):
-
     try:
+        try:
+            uuid.UUID(event_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid event_id format: {event_id}. Must be a valid UUID.",
+                details={"field": "event_id", "value": event_id}
+            )
+        if page < 1:
+            raise ValidationError(
+                "Page number must be greater than or equal to 1",
+                details={"field": "page", "value": page}
+            )
+        
+        if page_size < 1 or page_size > 100:
+            raise ValidationError(
+                "Page size must be between 1 and 100",
+                details={"field": "page_size", "value": page_size}
+            )
+            
         with get_db_connection() as conn:
             cursor = conn.cursor()
     
@@ -21,12 +46,8 @@ def get_event_photos(event_id: str, page: int = 1, page_size: int = 20):
             )
             
             if not cursor.fetchone():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Event {event_id} not found"
-                )
+                raise NotFoundError("Event", event_id)
             
-   
             cursor.execute(
                 "SELECT COUNT(*) FROM images WHERE event_id = ?",
                 (event_id,)
@@ -35,16 +56,11 @@ def get_event_photos(event_id: str, page: int = 1, page_size: int = 20):
             total_count = cursor.fetchone()[0]
             total_pages = math.ceil(total_count / page_size)
             
-     
-            if page < 1:
-                page = 1
             if page > total_pages and total_pages > 0:
                 page = total_pages
             
-      
             offset = (page - 1) * page_size
             
-           
             cursor.execute(
                 """
                 SELECT image_id, event_id, original_filename, storage_path, upload_date, file_size, processed
@@ -79,22 +95,25 @@ def get_event_photos(event_id: str, page: int = 1, page_size: int = 20):
                 "total_pages": total_pages
             }
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error retrieving event photos: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve event photos: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to retrieve event photos: {str(e)}", original_error=e)
 
+@handle_service_error
 async def upload_event_images(event_id: str, files: list[UploadFile]):
-
     try:
-        with get_db_connection() as conn:
+        try:
+            uuid.UUID(event_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid event ID format: {event_id}. Must be a valid UUID.",
+                details={"field": "event_id", "value": event_id}
+            )
+        with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-        
             cursor.execute(
                 """
                 SELECT e.customer_id, e.status_id, st.status_code
@@ -107,22 +126,17 @@ async def upload_event_images(event_id: str, files: list[UploadFile]):
             
             event_info = cursor.fetchone()
             if not event_info:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Event {event_id} not found"
-                )
+                raise NotFoundError("Event", event_id)
             
             customer_id = event_info[0]
             event_status = event_info[2]
             
-    
             if event_status in ["archived"]:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot upload to event with status: {event_status}"
+                raise ValidationError(
+                    f"Cannot upload to event with status: {event_status}",
+                    details={"event_status": event_status}
                 )
             
-     
             event_dir = os.path.join(
                 settings.STORAGE_DIR,
                 "customers",
@@ -137,60 +151,73 @@ async def upload_event_images(event_id: str, files: list[UploadFile]):
             uploaded_files = []
             
             for file in files:
-
-                file_uuid = str(uuid.uuid4())
-                original_filename = file.filename
-                extension = os.path.splitext(original_filename)[1].lower()
-                
-                if extension not in ['.jpg', '.jpeg', '.png']:
-                    continue  
-                
-                storage_filename = f"{file_uuid}{extension}"
-                storage_path = os.path.join(original_dir, storage_filename)
-                
-    
-                with open(storage_path, "wb") as f:
-                    content = await file.read()
-                    f.write(content)
-                
-            
-                image_id = str(uuid.uuid4())
-                
-                cursor.execute(
-                    """
-                    INSERT INTO images (image_id, event_id, original_filename, storage_path, file_size)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (image_id, event_id, original_filename, storage_path, len(content))
-                )
-                
-                uploaded_files.append({
-                    "image_id": image_id,
-                    "original_filename": original_filename,
-                    "file_size": len(content),
-                    "processed": False
-                })
-            
-            conn.commit()
+                try:
+                    if not file.filename:
+                        logger.warning("Skipping file with no filename")
+                        continue
+                        
+                    file_uuid = str(uuid.uuid4())
+                    original_filename = file.filename
+                    extension = os.path.splitext(original_filename)[1].lower()
+                    
+                    if extension not in ['.jpg', '.jpeg', '.png']:
+                        continue  
+                    
+                    storage_filename = f"{file_uuid}{extension}"
+                    storage_path = os.path.join(original_dir, storage_filename)
+                    
+                    with open(storage_path, "wb") as f:
+                        content = await file.read()
+                        f.write(content)
+                    
+                    image_id = str(uuid.uuid4())
+                    
+                    cursor.execute(
+                        """
+                        INSERT INTO images (image_id, event_id, original_filename, storage_path, file_size)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (image_id, event_id, original_filename, storage_path, len(content))
+                    )
+                    
+                    uploaded_files.append({
+                        "image_id": image_id,
+                        "original_filename": original_filename,
+                        "file_size": len(content),
+                        "processed": False
+                    })
+                except Exception as file_error:
+                    logger.error(f"Error processing file {file.filename}: {str(file_error)}")
             
             return {
                 "uploaded_count": len(uploaded_files),
                 "uploaded_files": uploaded_files
             }
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error uploading images: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload images: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to upload images: {str(e)}", original_error=e)
 
-
+@handle_service_error
 def get_photo(event_id: str, photo_id: str, include_storage_path: bool = False):
-
     try:
+        try:
+            uuid.UUID(event_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid event ID format: {event_id}. Must be a valid UUID.",
+                details={"field": "event_id", "value": event_id}
+            )
+            
+        try:
+            uuid.UUID(photo_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid photo ID format: {photo_id}. Must be a valid UUID.",
+                details={"field": "photo_id", "value": photo_id}
+            )
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
@@ -206,10 +233,7 @@ def get_photo(event_id: str, photo_id: str, include_storage_path: bool = False):
             row = cursor.fetchone()
             
             if not row:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Photo {photo_id} not found in event {event_id}"
-                )
+                raise NotFoundError("Photo", photo_id, {"event_id": event_id})
                 
             photo = {
                 "photo_id": str(row[0]),
@@ -220,23 +244,35 @@ def get_photo(event_id: str, photo_id: str, include_storage_path: bool = False):
                 "processed": bool(row[6])
             }
             
-    
             if include_storage_path:
                 photo["storage_path"] = row[3]
             
             return photo
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error retrieving photo: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve photo: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to retrieve photo: {str(e)}", original_error=e)
 
+@handle_service_error
 def get_photo_file_path(event_id: str, photo_id: str):
     try:
+        try:
+            uuid.UUID(event_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid event ID format: {event_id}. Must be a valid UUID.",
+                details={"field": "event_id", "value": event_id}
+            )
+            
+        try:
+            uuid.UUID(photo_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid photo ID format: {photo_id}. Must be a valid UUID.",
+                details={"field": "photo_id", "value": photo_id}
+            )
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
@@ -248,72 +284,133 @@ def get_photo_file_path(event_id: str, photo_id: str):
             row = cursor.fetchone()
             
             if not row:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Photo {photo_id} not found in event {event_id}"
-                )
+                raise NotFoundError("Photo", photo_id, {"event_id": event_id})
                 
             storage_path = row[0]
             
             if not os.path.exists(storage_path):
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Photo file not found on storage"
+                raise NotFoundError(
+                    "Photo file", storage_path, 
+                    {"event_id": event_id, "photo_id": photo_id}
                 )
                 
             return storage_path
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error retrieving photo file path: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve photo file path: {str(e)}"
-        )
-
-def get_resized_photo_path(event_id: str, photo_id: str, size: int):
-
+        raise DatabaseError(f"Failed to retrieve photo file path: {str(e)}", original_error=e)
+    
+    
+    
+@handle_service_error
+def get_face_photo_file_path(event_id: str, face_id: str):
     try:
+        try:
+            uuid.UUID(event_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid event ID format: {event_id}. Must be a valid UUID.",
+                details={"field": "event_id", "value": event_id}
+            )
+            
+        try:
+            uuid.UUID(face_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid face ID format: {face_id}. Must be a valid UUID.",
+                details={"field": "face_id", "value": face_id}
+            )
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                """
+                SELECT f.face_path FROM faces f JOIN images i ON f.image_id = i.image_id WHERE f.face_id = ? AND i.event_id = ?
+                """, (face_id, event_id)
+            )
+            
+            row = cursor.fetchone()
+            
+            if not row:
+                raise NotFoundError("Face Photo", face_id, {"event_id": event_id})
+                
+            storage_path = row[0]
+            
+            if not os.path.exists(storage_path):
+                raise NotFoundError(
+                    "Face file", storage_path, 
+                    {"event_id": event_id, "face_id": face_id, "message": "Face file not found on server"}
+                )
+                
+            return storage_path
+            
+    except (NotFoundError, ValidationError):
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving photo file path: {str(e)}", exc_info=True)
+        raise DatabaseError(f"Failed to retrieve photo file path: {str(e)}", original_error=e)
+    
+    
+
+
+@handle_service_error
+def get_resized_photo_path(event_id: str, photo_id: str, size: int):
+    try:
+        try:
+            uuid.UUID(event_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid event ID format: {event_id}. Must be a valid UUID.",
+                details={"field": "event_id", "value": event_id}
+            )
+            
+        try:
+            uuid.UUID(photo_id)
+        except ValueError:
+            raise ValidationError(
+                f"Invalid photo ID format: {photo_id}. Must be a valid UUID.",
+                details={"field": "photo_id", "value": photo_id}
+            )
+        if size < 16 or size > 2048:
+            raise ValidationError(
+                "Size must be between 16 and 2048 pixels",
+                details={"field": "size", "value": size}
+            )
 
         original_path = get_photo_file_path(event_id, photo_id)
         
-
         filename, ext = os.path.splitext(original_path)
         resized_dir = os.path.join(os.path.dirname(os.path.dirname(original_path)), "resized")
         os.makedirs(resized_dir, exist_ok=True)
         
         resized_path = os.path.join(resized_dir, f"{os.path.basename(filename)}_{size}{ext}")
         
-
         if os.path.exists(resized_path):
             return resized_path
         
-   
         try:
             with Image.open(original_path) as img:
- 
                 width, height = img.size
                 new_height = int((size / width) * height)
                 
+
                 resized_img = img.resize((size, new_height), Image.Resampling.LANCZOS)
-         
+
                 resized_img.save(resized_path, quality=90)
                 
                 return resized_path
                 
         except Exception as e:
             logger.error(f"Error resizing photo: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to resize photo: {str(e)}"
+            raise ValidationError(
+                f"Failed to resize photo: {str(e)}",
+                details={"original_path": original_path, "size": size}
             )
             
-    except HTTPException:
+    except (NotFoundError, ValidationError):
         raise
     except Exception as e:
         logger.error(f"Error processing photo resize: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process photo resize: {str(e)}"
-        )
+        raise DatabaseError(f"Failed to process photo resize: {str(e)}", original_error=e)

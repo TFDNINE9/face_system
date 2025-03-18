@@ -23,9 +23,9 @@ async def list_events(
     customer_id: str = Query(None, description="Filter events by customer ID")
 ):
     if customer_id:
-        events = get_events_by_customer(customer_id)
+        events = await get_events_by_customer(customer_id)
     else:
-        events = get_all_events()
+        events = await get_all_events()
     
     return create_response(body=events)
 
@@ -33,14 +33,14 @@ async def list_events(
 async def get_event_by_id(
     event_id : str = Path(..., description="The ID of the event")
 ):
-    event_data = get_event(event_id)
+    event_data = await get_event(event_id)
     return create_response(body=event_data)
 
 @router.post("/", response_model=EventResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_api_key)])
-def create_event(
+async def create_event(
     event_data: EventCreate
 ):
-    new_event = create_event_service(event_data)
+    new_event = await create_event_service(event_data)
     headers = {"Location": f"{settings.BASE_URL}/events/{new_event['event_id']}"}
     return create_response(
         headers=headers,
@@ -53,7 +53,7 @@ async def update_event(
       event_data: EventUpdate,
     event_id: str = Path(..., description="The ID of the event")
 ):
-    updated_event = update_event_service(event_id, event_data)
+    updated_event = await update_event_service(event_id, event_data)
     return create_response(
         body=updated_event
     )
@@ -63,7 +63,7 @@ async def update_event(
 async def delete_existing_event(
     event_id: str = Path(..., description="The ID of the event")
 ):
-    delete_event(event_id)
+    await delete_event(event_id)
     return Response(
         status_code=status.HTTP_204_NO_CONTENT
     )

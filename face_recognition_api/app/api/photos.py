@@ -9,7 +9,8 @@ from ..services.photo import (
     get_photo,
     get_photo_file_path,
     get_resized_photo_path,
-    upload_event_images
+    upload_event_images,
+    get_face_photo_file_path
 )
 from ..utils import create_response
 
@@ -55,7 +56,6 @@ async def get_photo_file(
     size: int = Query(None, ge=16, le=2048, description="Width of the resized image in pixels")
 ):
     
-
     photo_data = get_photo(event_id, photo_id)
     
     if size is None:
@@ -77,5 +77,29 @@ async def get_photo_file(
     return FileResponse(
         path=file_path,
         filename=filename,
+        media_type=media_type
+    )
+    
+    
+    
+@router.get("/events/{event_id}/representatives/{face_id}/file")
+async def get_photo_file(
+    event_id: str = Path(..., description="The ID of the event"),
+    face_id: str = Path(..., description="The ID of face photo"),
+):
+    
+    file_path = get_face_photo_file_path(event_id, face_id)
+      
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in ['.jpg', '.jpeg']:
+        media_type = 'image/jpeg'
+    elif ext == '.png':
+        media_type = 'image/png'
+    else:
+        media_type = 'application/octet-stream'
+    
+    return FileResponse(
+        path=file_path,
         media_type=media_type
     )
