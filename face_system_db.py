@@ -890,7 +890,7 @@ class DatabaseFaceSystem:
         try:
             conn = self.get_db_connection()
             cursor = conn.cursor()
-            
+                        
             cluster_info = []
             
             # Process each cluster
@@ -929,6 +929,27 @@ class DatabaseFaceSystem:
                         (cluster_id, event_id, rep_face_id, len(cluster_faces))
                     )
                     conn.commit()
+                    
+                    person_id = str(uuid.uuid4())
+                    person_name = f"Unknown Person {cluster_id[:8]}"
+                    
+                    cursor.execute(
+                        """
+                        INSERT INTO persons (person_id, event_id, name, is_identified, representative_face_id)
+                        VALUES (?, ?, ?, 0,?)
+                        """,
+                        (person_id, event_id, person_name, rep_face_id)
+                    )
+                    
+                    # Link person to cluster
+                    cursor.execute(
+                        """
+                        INSERT INTO person_clusters (person_id, cluster_id, confidence)
+                        VALUES (?, ?, 1.0)
+                        """,
+                        (person_id, cluster_id)
+                    )
+                    conn.commit()
                 
                 # If existing cluster, update total_faces count
                 if is_existing:
@@ -941,10 +962,55 @@ class DatabaseFaceSystem:
                         (len(cluster_faces), cluster_id)
                     )
                     conn.commit()
+                    
+                    # Get the person_id for this existing cluster
+                    cursor.execute(
+                        """
+                        SELECT person_id FROM person_clusters WHERE cluster_id = ?
+                        """,
+                        (cluster_id,)
+                    )
+                    person_id_row = cursor.fetchone()
+                    if person_id_row:
+                        person_id = person_id_row[0]
+                    else:
+                        # If for some reason there's no person linked to this cluster, create one
+                        person_id = str(uuid.uuid4())
+                        person_name = f"Unknown Person {cluster_id[:8]}"
+                        
+                        cursor.execute(
+                            """
+                            INSERT INTO persons (person_id, event_id, name, is_identified)
+                            VALUES (?, ?, ?, 0)
+                            """,
+                            (person_id, event_id, person_name)
+                        )
+                        
+                        cursor.execute(
+                            """
+                            INSERT INTO person_clusters (person_id, cluster_id, confidence)
+                            VALUES (?, ?, 1.0)
+                            """,
+                            (person_id, cluster_id)
+                        )
+                        conn.commit()
+                    
                 
                 # Associate faces with this cluster
                 for face in cluster_faces:
                     face_id = face['face_id']
+                    
+                    image_id = face.get('image_id')
+                    if not image_id:
+                        cursor.execute(
+                            "SELECT image_id FROM faces WHERE face_id = ?",(face_id,)
+                        )
+                        image_row = cursor.fetchone()
+                        if image_row:
+                            image_id = image_row[0]
+                        else:
+                            logger.warning(f"Could not find image_id for face {face_id}")
+                            continue
                     
                     # Calculate similarity to representative
                     if is_existing:
@@ -968,6 +1034,15 @@ class DatabaseFaceSystem:
                         """,
                         (cluster_id, face_id, similarity)
                     )
+                    
+                    #add entry in person_appearances table
+                    cursor.execute(
+                        """
+                        INSERT INTO person_appearances (person_id, image_id, face_id, confidence)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (person_id, image_id, face_id, similarity)
+                    )
                 
                 conn.commit()
                 
@@ -976,7 +1051,8 @@ class DatabaseFaceSystem:
                     'representative_id': rep_face_id,
                     'representative_path': rep_face_path,
                     'total_faces': len(cluster_faces) + existing_total_faces,
-                    'is_new': not is_existing
+                    'is_new': not is_existing,
+                    'person_id': person_id
                 })
                 
             cursor.close()
@@ -1224,7 +1300,7 @@ class DatabaseFaceSystem:
                 """
                 SELECT c.cluster_id, c.total_faces, f.face_id, f.face_path, f.embedding_path
                 FROM clusters c
-                JOIN faces f ON c.representative_face_id = f.face_id
+                INNER JOIN faces f ON c.representative_face_id = f.face_id
                 WHERE c.event_id = ?
                 """,
                 (event_id,)

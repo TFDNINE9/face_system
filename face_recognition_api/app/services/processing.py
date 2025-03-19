@@ -230,9 +230,9 @@ async def search_face_in_event(event_id: str, file: UploadFile, threshold: float
             
             cluster_count = cursor.fetchone()[0]
             if cluster_count == 0:
-                raise ValidationError(
+                raise NotFoundError(
                     "No face clusters found for this event. Process images first.",
-                    details={"event_id": event_id}
+                    identifier="person in this event"
                 )
         
         # Save uploaded file to temp location
