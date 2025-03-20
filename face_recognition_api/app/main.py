@@ -19,7 +19,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
     
     app = FastAPI(
         title=settings.API_TITLE,
