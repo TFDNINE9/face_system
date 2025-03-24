@@ -1,7 +1,7 @@
 import jwt
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from passlib.context import CryptContext
 from ..config import settings
 import logging
@@ -60,10 +60,6 @@ def decode_token(token: str) -> Dict[str, Any]:
         logger.error(f"Error decoding token: {str(e)}")
         raise
 
-def get_token_data(token: str) -> Dict[str, Any]:
-    payload = decode_token(token)
-    return payload
-
 def create_refresh_token_id() -> str:
     return str(uuid.uuid4())
 
@@ -71,7 +67,7 @@ def get_password_reset_token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=24)
 
 def get_email_verification_token_expiry() -> datetime:
-    return datetime.now(timezone.utc)+ timedelta(days=7)
+    return datetime.now(timezone.utc) + timedelta(days=7)
 
 def get_refresh_token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=30)

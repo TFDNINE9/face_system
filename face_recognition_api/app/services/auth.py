@@ -5,6 +5,8 @@ import string
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple, Union
 
+import jwt
+
 from ..database import get_db_connection, get_db_transaction
 from ..schemas.auth import UserCreate, UserUpdate, TokenResponse, UserResponse
 from ..util.auth import (
@@ -163,41 +165,45 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
             if not is_active:
                 raise ValidationError("User account is disabled")
                 
-            # Create refresh token
-            token_id = create_refresh_token_id()
-            expires_at = get_refresh_token_expiry()
-            
-            cursor.execute(
-                """
-                INSERT INTO auth_refresh_tokens (
-                    token_id, user_id, expires_at
-                ) VALUES (?, ?, ?)
-                """,
-                (token_id, user_id, expires_at)
-            )
-            
-            # Update last login time
-            cursor.execute(
-                "UPDATE auth_users SET last_login = SYSUTCDATETIME() WHERE user_id = ?",
-                (user_id,)
-            )
-            
-            # Add audit log entry
-            cursor.execute(
-                """
-                INSERT INTO auth_audit_logs (
-                    user_id, event_type, details
-                ) VALUES (?, ?, ?)
-                """,
-                (user_id, "login", "Successful login")
-            )
-            
-            conn.commit()
-            
-            # Get user with groups
-            user = get_user_by_id(user_id)
-            
-            return user, token_id
+            try:
+                # Create refresh token
+                token_id = create_refresh_token_id()
+                expires_at = get_refresh_token_expiry()
+                
+                cursor.execute(
+                    """
+                    INSERT INTO auth_refresh_tokens (
+                        token_id, user_id, expires_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (token_id, user_id, expires_at)
+                )
+                
+                # Update last login time
+                cursor.execute(
+                    "UPDATE auth_users SET last_login = SYSUTCDATETIME() WHERE user_id = ?",
+                    (user_id,)
+                )
+                
+                # Add audit log entry
+                cursor.execute(
+                    """
+                    INSERT INTO auth_audit_logs (
+                        user_id, event_type, details
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (user_id, "login", "Successful login")
+                )
+                
+                conn.commit()
+                
+                # Get user with groups
+                user = get_user_by_id(user_id)
+                
+                return user, token_id
+            except jwt.PyJWTError as e:
+                logger.error(f"JWT error in authentication: {str(e)}")
+                raise ValidationError("Authentication failed due to token error")
             
     except ValidationError:
         raise

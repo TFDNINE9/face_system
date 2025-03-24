@@ -65,6 +65,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
                 headers={"WWW-Authenticate": "Bearer"},
             )
             
+    
+            
     except JWTError:
         raise credentials_exception
         

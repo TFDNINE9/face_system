@@ -40,7 +40,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
+            detail=f"Invalid credentials exception: {e}",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -121,8 +121,10 @@ async def password_reset_confirm(reset_data: PasswordResetConfirm):
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: UserResponse = Depends(get_current_active_user)):
+    
+    user_model = UserResponse(**current_user)
     """Get current user profile."""
-    return create_response(body=current_user)
+    return user_model
 
 @router.put("/me", response_model=UserResponse)
 async def update_me(
