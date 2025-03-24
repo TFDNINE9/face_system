@@ -1,8 +1,7 @@
 import logging
 import uuid
-
-from face_recognition_api.app.schemas.person import PersonUpdate
-from face_recognition_api.app.services.error_handling import handle_service_error
+from ..schemas.person import PersonUpdate
+from ..services.error_handling import handle_service_error
 from main import get_db_connection
 from .error_handling import (
     handle_service_error,
@@ -10,7 +9,6 @@ from .error_handling import (
     ValidationError,
     DatabaseError
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -78,19 +76,6 @@ def get_person_by_event(event_id : str, page: int = 1, page_size: int = 20):
                 (event_id, offset, page_size)
             )
             
-            # cursor.execute(
-            #     """
-            #     SELECT p.person_id, p.name, p.is_identified, p.representative_face_id,
-            #            COUNT(pa.face_id) as face_count
-            #     FROM persons p
-            #     LEFT JOIN person_appearances pa ON p.person_id = pa.person_id
-            #     WHERE p.event_id = ?
-            #     GROUP BY p.person_id, p.name, p.is_identified, p.representative_face_id
-            #     ORDER BY face_count DESC, p.name
-            #     """,
-            #     (event_id,)
-            # )
-            
             persons = []
             columns = [column[0] for column in cursor.description]
             
@@ -153,15 +138,6 @@ def get_person_detail(event_id : str, person_id: str, appearances_page: int = 1,
             
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # cursor.execute(
-            #     """ SELECT p.person_id, p.name, p.is_identified, p.representative_face_id,
-            #            p.email, p.phone, p.notes, p.created_at, p.updated_at
-            #     FROM persons p
-            #     WHERE p.event_id = ? AND p.person_id = ?
-            #     """,
-            #     (event_id, person_id)
-            # )
-            
             cursor.execute(
                 """
                 SELECT p.person_id, p.name, p.is_identified, p.representative_face_id,
@@ -203,18 +179,6 @@ def get_person_detail(event_id : str, person_id: str, appearances_page: int = 1,
                 """,
                 (person_id, appearances_offset, appearances_page_size)
             )
-            
-            
-            # cursor.execute(
-            #   """  SELECT pa.face_id, pa.image_id, pa.confidence,
-            #         i.original_filename
-            #     FROM person_appearances pa
-            #     JOIN images i ON pa.image_id = i.image_id
-            #     WHERE pa.person_id = ?
-            #     ORDER BY pa.confidence DESC
-            #     """,
-            #     (person_id,)
-            # )
             
             appearances = []
             appearance_columns = [column[0] for column in cursor.description]

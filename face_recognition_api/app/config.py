@@ -31,6 +31,18 @@ class Settings(BaseSettings):
     SSL_KEYFILE: str = os.getenv("SSL_KEYFILE", "")
     SSL_CERTFILE: str = os.getenv("SSL_CERTFILE", "")
     
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+    
+    
+    SMTP_SERVER: str = os.getenv("SMTP_SERVER", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "noreply@example.com")
+    EMAIL_FROM_NAME: str = os.getenv("EMAIL_FROM_NAME", "Face Recognition System")
+    
     @property
     def DB_CONNECTION_STRING(self) -> str:
    
