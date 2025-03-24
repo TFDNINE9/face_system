@@ -293,7 +293,7 @@ def get_user_by_id(user_id: str) -> UserResponse:
         raise DatabaseError(f"Failed to retrieve user: {str(e)}", original_error=e)
 
 @handle_service_error
-def create_tokens(user_id: str, user_groups: List[str], refresh_token_id: str) -> TokenResponse:
+def create_tokens(user_id: str, user_groups: List[str], refresh_token_id: str, username: str) -> TokenResponse:
     """
     Create access and refresh tokens for a user.
     
@@ -308,7 +308,8 @@ def create_tokens(user_id: str, user_groups: List[str], refresh_token_id: str) -
     try:
         # Create token payload
         token_data = {
-            "sub": user_id,
+            "sub": username,
+            "uid": user_id,
             "groups": user_groups
         }
         

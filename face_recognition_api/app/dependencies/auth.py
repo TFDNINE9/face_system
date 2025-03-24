@@ -12,7 +12,7 @@ from ..schemas.auth import UserResponse
 logger = logging.getLogger(__name__)
 
 # OAuth2 scheme for swagger UI
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
     """
@@ -43,7 +43,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
         # Decode JWT token
         payload = decode_token(token)
         
-        user_id: str = payload.get("sub")
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        
+        user_id: str = payload.get("uid")
         if user_id is None:
             raise credentials_exception
             

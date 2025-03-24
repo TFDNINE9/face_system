@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     SSL_CERTFILE: str = os.getenv("SSL_CERTFILE", "")
     
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
-    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "")
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS512")
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
     
     

@@ -17,7 +17,7 @@ router = APIRouter(
     tags=["Authentication"],
 )
 
-@router.post("/token", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     """Login to get access token."""
     try:
@@ -27,11 +27,11 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         user_groups = [group["name"] for group in user["groups"]]
         
         # Create tokens
-        tokens = create_tokens(user["user_id"], user_groups, refresh_token_id)
+        tokens = create_tokens(user["user_id"], user_groups, refresh_token_id, user["username"])
         
         headers = {
-            "Authorization": f"Bearer {tokens['access_token']}",
-            "X-Refresh-Token": tokens["refresh_token"]
+            "Jwt-Token": tokens["access_token"],
+            "Refresh-Token": tokens["refresh_token"]
         }
         
         return create_response(body={"message":"Authentication successful"},
@@ -51,8 +51,8 @@ async def refresh(refresh_request: RefreshTokenReqeust):
         tokens = refresh_access_token(refresh_request.refresh_token)
         
         headers = {
-            "Authorization": f"Bearer {tokens['access_token']}",
-            "X-Refresh-Token": tokens["refresh_token"]
+            "Jwt-Token": tokens["access_token"],
+            "Refresh-Token": tokens["refresh_token"]
         }
 
         return create_response(body={"message": "Token refreshed successful"}, headers=headers)

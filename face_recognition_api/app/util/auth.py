@@ -19,6 +19,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     
+    print(f"Using JWT algorithm: {settings.JWT_ALGORITHM}")
+    
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -35,7 +37,7 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
         encoded_jwt = jwt.encode(
             to_encode, 
             settings.JWT_SECRET_KEY, 
-            algorithm=settings.JWT_ALGORITHM
+            algorithm="HS512"
         )
         return encoded_jwt
     except Exception as e:
