@@ -1,7 +1,7 @@
 import jwt
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from passlib.context import CryptContext
 from ..config import settings
 import logging
@@ -51,10 +51,11 @@ def decode_token(token: str) -> Dict[str, Any]:
         )
         return payload
     except jwt.ExpiredSignatureError:
-        logger.warning("Expired token")
+        # We want to specifically propagate this error
+        logger.warning("JWT token has expired")
         raise
     except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid token: {str(e)}")
+        logger.warning(f"Invalid JWT token: {str(e)}")
         raise
     except Exception as e:
         logger.error(f"Error decoding token: {str(e)}")

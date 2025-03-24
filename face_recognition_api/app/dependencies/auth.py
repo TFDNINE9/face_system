@@ -1,23 +1,7 @@
-# from fastapi import HTTPException, status, Header
-# from ..config import settings
-
-# async def verify_api_key(x_api_key: str = Header(None)):
-#     if not x_api_key:
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED,
-#             detail="API key is required"
-#         )
-#     if x_api_key != settings.API_KEY:
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED,
-#             detail="Invalid API key"
-#         )
-#     return x_api_key
-
-
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from typing import Optional, List, Dict, Any
 import logging
 from ..util.auth import decode_token
@@ -49,6 +33,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
         headers={"WWW-Authenticate": "Bearer"},
     )
     
+    token_expired_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token has expired",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
     try:
         # Decode JWT token
         payload = decode_token(token)
@@ -65,9 +55,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
                 headers={"WWW-Authenticate": "Bearer"},
             )
             
-    
-            
-    except JWTError:
+    except ExpiredSignatureError:
+        # Specific handling for expired tokens
+        logger.warning("Token has expired")
+        raise token_expired_exception
+    except JWTError as e:
+        # Other JWT errors
+        logger.error(f"JWT Error: {str(e)}")
         raise credentials_exception
         
     try:
