@@ -2,7 +2,7 @@ import logging
 import uuid
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional, Tuple, Union
 
 import jwt
@@ -44,7 +44,6 @@ def register_user(user_data: UserCreate) -> UserResponse:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if username already exists
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE username = ?",
                 (user_data.username,)
@@ -55,7 +54,6 @@ def register_user(user_data: UserCreate) -> UserResponse:
                     details={"field": "username"}
                 )
                 
-            # Check if email already exists
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE email = ?",
                 (user_data.email,)
@@ -66,10 +64,8 @@ def register_user(user_data: UserCreate) -> UserResponse:
                     details={"field": "email"}
                 )
                 
-            # Hash password
             password_hash = hash_password(user_data.password)
             
-            # Create new user
             user_id = str(uuid.uuid4())
             cursor.execute(
                 """
@@ -80,7 +76,6 @@ def register_user(user_data: UserCreate) -> UserResponse:
                 (user_id, user_data.username, user_data.email, user_data.phone, password_hash)
             )
             
-            # Add user to default 'user' group
             cursor.execute("SELECT group_id FROM auth_groups WHERE name = 'user'")
             group_row = cursor.fetchone()
             
@@ -93,7 +88,6 @@ def register_user(user_data: UserCreate) -> UserResponse:
             
             conn.commit()
             
-            # Create email verification token
             verification_id = str(uuid.uuid4())
             expires_at = get_email_verification_token_expiry()
             
@@ -110,7 +104,6 @@ def register_user(user_data: UserCreate) -> UserResponse:
             
             # TODO: Send verification email
             
-            # Get user with groups
             user = get_user_by_id(user_id)
             
             return user
@@ -141,7 +134,6 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if input is email or username
             is_email = '@' in username_or_email
             
             if is_email:
@@ -157,16 +149,13 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                 
             user_id, password_hash, is_active = user_row
             
-            # Verify password
             if not verify_password(password, password_hash):
                 raise ValidationError("Invalid credentials")
                 
-            # Check if user is active
             if not is_active:
                 raise ValidationError("User account is disabled")
                 
             try:
-                # Create refresh token
                 token_id = create_refresh_token_id()
                 expires_at = get_refresh_token_expiry()
                 
@@ -179,13 +168,11 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                     (token_id, user_id, expires_at)
                 )
                 
-                # Update last login time
                 cursor.execute(
                     "UPDATE auth_users SET last_login = SYSUTCDATETIME() WHERE user_id = ?",
                     (user_id,)
                 )
                 
-                # Add audit log entry
                 cursor.execute(
                     """
                     INSERT INTO auth_audit_logs (
@@ -197,7 +184,6 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                 
                 conn.commit()
                 
-                # Get user with groups
                 user = get_user_by_id(user_id)
                 
                 return user, token_id
@@ -230,7 +216,6 @@ def get_user_by_id(user_id: str) -> UserResponse:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # Get user data
             cursor.execute(
                 """
                 SELECT 
@@ -247,7 +232,6 @@ def get_user_by_id(user_id: str) -> UserResponse:
             if not user_row:
                 raise NotFoundError("User", user_id)
                 
-            # Get user groups
             cursor.execute(
                 """
                 SELECT g.group_id, g.name, g.description, g.created_at, g.updated_at
@@ -269,8 +253,7 @@ def get_user_by_id(user_id: str) -> UserResponse:
                     "updated_at": group_row[4]
                 })
                 group_row = cursor.fetchone()
-                
-            # Construct user response
+    
             user = {
                 "user_id": str(user_row[0]),
                 "username": user_row[1],
@@ -306,17 +289,14 @@ def create_tokens(user_id: str, user_groups: List[str], refresh_token_id: str, u
         Token response with access and refresh tokens
     """
     try:
-        # Create token payload
         token_data = {
             "sub": username,
             "uid": user_id,
             "groups": user_groups
         }
-        
-        # Create access token
+
         access_token = create_access_token(token_data)
-        
-        # Return token response
+
         return {
             "access_token": access_token,
             "refresh_token": refresh_token_id,
@@ -346,7 +326,6 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if refresh token exists and is valid
             cursor.execute(
                 """
                 SELECT t.user_id, t.is_revoked, t.expires_at
@@ -361,16 +340,12 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
                 raise ValidationError("Invalid refresh token")
                 
             user_id, is_revoked, expires_at = token_row
-            
-            # Check if token is revoked
             if is_revoked:
                 raise ValidationError("Refresh token has been revoked")
-                
-            # Check if token is expired
-            if expires_at < datetime.utcnow():
+
+            if expires_at < datetime.now():
                 raise ValidationError("Refresh token has expired")
                 
-            # Get user groups
             cursor.execute(
                 """
                 SELECT g.name
@@ -383,7 +358,16 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
             
             groups = [row[0] for row in cursor.fetchall()]
             
-            # Create new refresh token
+            cursor.execute(
+                """SELECT username from auth_users where user_id = ?""", user_id
+            )
+            
+            username_row = cursor.fetchone()
+            if not  username_row:
+                raise
+            
+            username = username_row[0] if username_row else None
+
             new_token_id = create_refresh_token_id()
             new_expires_at = get_refresh_token_expiry()
             
@@ -395,8 +379,7 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
                 """,
                 (new_token_id, user_id, new_expires_at)
             )
-            
-            # Revoke old refresh token
+
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
@@ -405,8 +388,7 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
                 """,
                 (refresh_token_id,)
             )
-            
-            # Add audit log entry
+
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -418,8 +400,7 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
             
             conn.commit()
             
-            # Create new tokens
-            return create_tokens(user_id, groups, new_token_id)
+            return create_tokens(user_id, groups, new_token_id, username)
             
     except ValidationError:
         raise
@@ -443,7 +424,6 @@ def logout_user(user_id: str, refresh_token_id: str) -> None:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Revoke refresh token
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
@@ -453,7 +433,6 @@ def logout_user(user_id: str, refresh_token_id: str) -> None:
                 (refresh_token_id, user_id)
             )
             
-            # Add audit log entry
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -488,7 +467,6 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Get current password hash
             cursor.execute(
                 "SELECT password_hash FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -500,14 +478,11 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
                 
             current_hash = user_row[0]
             
-            # Verify current password
             if not verify_password(current_password, current_hash):
                 raise ValidationError("Current password is incorrect")
-                
-            # Hash new password
+
             new_hash = hash_password(new_password)
             
-            # Update password
             cursor.execute(
                 """
                 UPDATE auth_users
@@ -517,7 +492,6 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
                 (new_hash, user_id)
             )
             
-            # Revoke all refresh tokens for user
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
@@ -527,7 +501,6 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
                 (user_id,)
             )
             
-            # Add audit log entry
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -561,7 +534,6 @@ def request_password_reset(email: str) -> None:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Get user by email
             cursor.execute(
                 "SELECT user_id FROM auth_users WHERE email = ?",
                 (email,)
@@ -573,7 +545,6 @@ def request_password_reset(email: str) -> None:
                 
             user_id = user_row[0]
             
-            # Create password reset token
             reset_id = str(uuid.uuid4())
             expires_at = get_password_reset_token_expiry()
             
@@ -586,7 +557,6 @@ def request_password_reset(email: str) -> None:
                 (reset_id, user_id, expires_at)
             )
             
-            # Add audit log entry
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -601,7 +571,6 @@ def request_password_reset(email: str) -> None:
             # TODO: Send password reset email
             
     except NotFoundError:
-        # Don't reveal if email exists
         logger.info(f"Password reset requested for non-existent email: {email}")
         return
     except Exception as e:
@@ -625,7 +594,6 @@ def reset_password(reset_token: str, new_password: str) -> None:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if reset token exists and is valid
             cursor.execute(
                 """
                 SELECT r.user_id, r.is_used, r.expires_at
@@ -641,18 +609,14 @@ def reset_password(reset_token: str, new_password: str) -> None:
                 
             user_id, is_used, expires_at = token_row
             
-            # Check if token is used
             if is_used:
                 raise ValidationError("Password reset token has already been used")
                 
-            # Check if token is expired
-            if expires_at < datetime.utcnow():
+            if expires_at < datetime.now():
                 raise ValidationError("Password reset token has expired")
                 
-            # Hash new password
             new_hash = hash_password(new_password)
             
-            # Update password
             cursor.execute(
                 """
                 UPDATE auth_users
@@ -661,8 +625,7 @@ def reset_password(reset_token: str, new_password: str) -> None:
                 """,
                 (new_hash, user_id)
             )
-            
-            # Mark token as used
+
             cursor.execute(
                 """
                 UPDATE auth_password_resets
@@ -671,8 +634,7 @@ def reset_password(reset_token: str, new_password: str) -> None:
                 """,
                 (reset_token,)
             )
-            
-            # Revoke all refresh tokens for user
+
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
@@ -682,7 +644,6 @@ def reset_password(reset_token: str, new_password: str) -> None:
                 (user_id,)
             )
             
-            # Add audit log entry
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -716,7 +677,6 @@ def activate_user(user_id: str) -> None:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if user exists
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -725,7 +685,6 @@ def activate_user(user_id: str) -> None:
             if not cursor.fetchone():
                 raise NotFoundError("User", user_id)
                 
-            # Activate user
             cursor.execute(
                 """
                 UPDATE auth_users
@@ -734,8 +693,7 @@ def activate_user(user_id: str) -> None:
                 """,
                 (user_id,)
             )
-            
-            # Add audit log entry
+
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -771,8 +729,7 @@ def reset_user_password(user_id: str) -> str:
     try:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
-            
-            # Check if user exists
+
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -781,7 +738,6 @@ def reset_user_password(user_id: str) -> str:
             if not cursor.fetchone():
                 raise NotFoundError("User", user_id)
                 
-            # Generate a temporary password
             temp_password = ''.join(
                 random.choices(
                     string.ascii_uppercase + 
@@ -791,10 +747,8 @@ def reset_user_password(user_id: str) -> str:
                 )
             )
             
-            # Hash the temporary password
             password_hash = hash_password(temp_password)
             
-            # Update user's password
             cursor.execute(
                 """
                 UPDATE auth_users
@@ -804,7 +758,6 @@ def reset_user_password(user_id: str) -> str:
                 (password_hash, user_id)
             )
             
-            # Revoke all refresh tokens
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
@@ -814,7 +767,6 @@ def reset_user_password(user_id: str) -> str:
                 (user_id,)
             )
             
-            # Add audit log entry
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -851,8 +803,7 @@ def add_user_to_group(user_id: str, group_name: str) -> None:
     try:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
-            
-            # Check if user exists
+     
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -860,8 +811,7 @@ def add_user_to_group(user_id: str, group_name: str) -> None:
             
             if not cursor.fetchone():
                 raise NotFoundError("User", user_id)
-                
-            # Check if group exists
+    
             cursor.execute(
                 "SELECT group_id FROM auth_groups WHERE name = ?",
                 (group_name,)
@@ -873,7 +823,6 @@ def add_user_to_group(user_id: str, group_name: str) -> None:
                 
             group_id = group_row[0]
             
-            # Check if user is already in group
             cursor.execute(
                 """
                 SELECT 1 FROM auth_user_groups
@@ -887,8 +836,7 @@ def add_user_to_group(user_id: str, group_name: str) -> None:
                     f"User is already in group '{group_name}'",
                     details={"user_id": user_id, "group_name": group_name}
                 )
-                
-            # Add user to group
+
             cursor.execute(
                 """
                 INSERT INTO auth_user_groups (user_id, group_id)
@@ -897,7 +845,6 @@ def add_user_to_group(user_id: str, group_name: str) -> None:
                 (user_id, group_id)
             )
             
-            # Add audit log entry
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -932,8 +879,7 @@ def remove_user_from_group(user_id: str, group_name: str) -> None:
     try:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
-            
-            # Check if user exists
+
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -941,8 +887,7 @@ def remove_user_from_group(user_id: str, group_name: str) -> None:
             
             if not cursor.fetchone():
                 raise NotFoundError("User", user_id)
-                
-            # Check if group exists
+   
             cursor.execute(
                 "SELECT group_id FROM auth_groups WHERE name = ?",
                 (group_name,)
@@ -953,8 +898,7 @@ def remove_user_from_group(user_id: str, group_name: str) -> None:
                 raise NotFoundError("Group", group_name)
                 
             group_id = group_row[0]
-            
-            # Check if user is in group
+   
             cursor.execute(
                 """
                 SELECT 1 FROM auth_user_groups
@@ -968,8 +912,7 @@ def remove_user_from_group(user_id: str, group_name: str) -> None:
                     f"User is not in group '{group_name}'",
                     details={"user_id": user_id, "group_name": group_name}
                 )
-                
-            # Remove user from group
+
             cursor.execute(
                 """
                 DELETE FROM auth_user_groups
@@ -978,7 +921,7 @@ def remove_user_from_group(user_id: str, group_name: str) -> None:
                 (user_id, group_id)
             )
             
-            # Add audit log entry
+        
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -1012,7 +955,6 @@ def verify_email(verification_token: str) -> None:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if verification token exists and is valid
             cursor.execute(
                 """
                 SELECT v.user_id, v.is_used, v.expires_at
@@ -1028,15 +970,13 @@ def verify_email(verification_token: str) -> None:
                 
             user_id, is_used, expires_at = token_row
             
-            # Check if token is used
+    
             if is_used:
                 raise ValidationError("Email verification token has already been used")
-                
-            # Check if token is expired
-            if expires_at < datetime.utcnow():
+
+            if expires_at < datetime.now():
                 raise ValidationError("Email verification token has expired")
-                
-            # Mark email as verified
+
             cursor.execute(
                 """
                 UPDATE auth_users
@@ -1046,7 +986,7 @@ def verify_email(verification_token: str) -> None:
                 (user_id,)
             )
             
-            # Mark token as used
+
             cursor.execute(
                 """
                 UPDATE auth_email_verifications
@@ -1056,7 +996,7 @@ def verify_email(verification_token: str) -> None:
                 (verification_token,)
             )
             
-            # Add audit log entry
+
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -1095,7 +1035,7 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if user exists
+
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -1103,8 +1043,7 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
             
             if not cursor.fetchone():
                 raise NotFoundError("User", user_id)
-                
-            # Check if this is an admin user
+
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM auth_user_groups ug
@@ -1116,7 +1055,7 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
             
             is_admin = cursor.fetchone()[0] > 0
             
-            # If user is admin, check if there are other active admins
+        
             if is_admin:
                 cursor.execute(
                     """
@@ -1139,9 +1078,9 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
             update_fields = []
             update_values = []
             
-            # Check for username update
+           
             if user_data.username is not None:
-                # Check if username is already taken
+                
                 cursor.execute(
                     "SELECT 1 FROM auth_users WHERE username = ? AND user_id != ?",
                     (user_data.username, user_id)
@@ -1156,9 +1095,9 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
                 update_fields.append("username = ?")
                 update_values.append(user_data.username)
                 
-            # Check for email update
+       
             if user_data.email is not None:
-                # Check if email is already registered
+             
                 cursor.execute(
                     "SELECT 1 FROM auth_users WHERE email = ? AND user_id != ?",
                     (user_data.email, user_id)
@@ -1172,11 +1111,10 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
                     
                 update_fields.append("email = ?")
                 update_values.append(user_data.email)
-                
-                # Reset email verification if email changes
+              
                 update_fields.append("is_email_verified = 0")
                 
-                # Create new email verification token
+           
                 verification_id = str(uuid.uuid4())
                 expires_at = get_email_verification_token_expiry()
                 
@@ -1191,26 +1129,25 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
                 
                 # TODO: Send verification email
                 
-            # Check for phone update
+  
             if user_data.phone is not None:
                 update_fields.append("phone = ?")
                 update_values.append(user_data.phone)
                 
-            # If no fields to update, return user
+        
             if not update_fields:
                 return get_user_by_id(user_id)
                 
-            # Add updated_at field
+
             update_fields.append("updated_at = SYSUTCDATETIME()")
             
-            # Add user_id to values
+   
             update_values.append(user_id)
-            
-            # Update user
+    
             query = f"UPDATE auth_users SET {', '.join(update_fields)} WHERE user_id = ?"
             cursor.execute(query, tuple(update_values))
             
-            # Add audit log entry
+        
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -1222,7 +1159,7 @@ def update_user(user_id: str, user_data: UserUpdate) -> UserResponse:
             
             conn.commit()
             
-            # Get updated user
+      
             return get_user_by_id(user_id)
             
     except (NotFoundError, ConflictError):
@@ -1250,11 +1187,11 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # Get total count
+     
             cursor.execute("SELECT COUNT(*) FROM auth_users")
             total_count = cursor.fetchone()[0]
             
-            # Get users with pagination
+ 
             cursor.execute(
                 """
                 SELECT 
@@ -1272,7 +1209,7 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
             while row := cursor.fetchone():
                 user_id = row[0]
                 
-                # Get user groups
+           
                 cursor.execute(
                     """
                     SELECT g.group_id, g.name, g.description, g.created_at, g.updated_at
@@ -1290,12 +1227,12 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                         "group_id": str(group_row[0]),
                         "name": group_row[1],
                         "description": group_row[2],
-                        "created_at": group_row[3],
-                        "updated_at": group_row[4]
+                        "created_at": group_row[3].isoformat() if group_row[3] else None,
+                        "updated_at": group_row[4].isoformat() if group_row[4] else None
                     })
                     group_row = cursor.fetchone()
                 
-                # Create user object
+            
                 user = {
                     "user_id": str(user_id),
                     "username": row[1],
@@ -1303,9 +1240,9 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                     "phone": row[3],
                     "is_active": bool(row[4]),
                     "is_email_verified": bool(row[5]),
-                    "last_login": row[6],
-                    "created_at": row[7],
-                    "updated_at": row[8],
+                    "last_login": row[6].isoformat() if row[6] else None,
+                    "created_at": row[7].isoformat() if row[7] else None,
+                    "updated_at": row[8].isoformat() if row[8] else None,
                     "groups": groups
                 }
                 
@@ -1333,7 +1270,7 @@ def deactivate_user(user_id: str) -> None:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-            # Check if user exists
+       
             cursor.execute(
                 "SELECT 1 FROM auth_users WHERE user_id = ?",
                 (user_id,)
@@ -1342,7 +1279,7 @@ def deactivate_user(user_id: str) -> None:
             if not cursor.fetchone():
                 raise NotFoundError("User", user_id)
                 
-            # Deactivate user
+      
             cursor.execute(
                 """
                 UPDATE auth_users
@@ -1351,8 +1288,7 @@ def deactivate_user(user_id: str) -> None:
                 """,
                 (user_id,)
             )
-            
-            # Revoke all refresh tokens
+    
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
@@ -1362,7 +1298,7 @@ def deactivate_user(user_id: str) -> None:
                 (user_id,)
             )
             
-            # Add audit log entry
+        
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (

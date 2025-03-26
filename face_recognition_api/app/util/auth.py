@@ -22,13 +22,13 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     print(f"Using JWT algorithm: {settings.JWT_ALGORITHM}")
     
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = datetime.now() + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({
         "exp": expire,
-        "iat": datetime.now(timezone.utc),
+        "iat": datetime.now(),
         "jti": str(uuid.uuid4()),
         "type": "access"
     })
@@ -67,10 +67,10 @@ def create_refresh_token_id() -> str:
     return str(uuid.uuid4())
 
 def get_password_reset_token_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=24)
+    return datetime.now() + timedelta(hours=24)
 
 def get_email_verification_token_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(days=7)
+    return datetime.now() + timedelta(days=7)
 
 def get_refresh_token_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(days=30)
+    return datetime.now() + timedelta(days=30)

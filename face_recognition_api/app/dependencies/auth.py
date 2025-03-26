@@ -11,7 +11,6 @@ from ..schemas.auth import UserResponse
 
 logger = logging.getLogger(__name__)
 
-# OAuth2 scheme for swagger UI
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
@@ -40,7 +39,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
     )
     
     try:
-        # Decode JWT token
+        
         payload = decode_token(token)
         
         username: str = payload.get("sub")
@@ -60,16 +59,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
             )
             
     except ExpiredSignatureError:
-        # Specific handling for expired tokens
+        
         logger.warning("Token has expired")
         raise token_expired_exception
     except JWTError as e:
-        # Other JWT errors
+        
         logger.error(f"JWT Error: {str(e)}")
         raise credentials_exception
         
     try:
-        # Get user from database
+        
         user = get_user_by_id(user_id)
         
         if not user:
@@ -132,7 +131,7 @@ def has_group(required_groups: List[str]):
         
     return check_groups
 
-# Specific role-based dependencies
+
 async def is_admin(current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
     """
     Check if user is an admin.
