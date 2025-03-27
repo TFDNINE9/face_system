@@ -49,8 +49,13 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
 
 def decode_token(token: str) -> Dict[str, Any]:
     try:
+        if isinstance(token, str):
+            token_bytes = token.encode('utf-8')
+        else:
+            token_bytes = token
+        
         payload = jwt.decode(
-            token, 
+            token_bytes, 
             settings.JWT_SECRET_KEY, 
             algorithms=[settings.JWT_ALGORITHM],
             options={

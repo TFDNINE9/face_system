@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
@@ -13,6 +14,8 @@ from ..services.auth import (
 from ..config import settings
 from ..utils import create_response
 from ..dependencies.auth import get_current_user, get_current_active_user, is_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/auth",
@@ -121,7 +124,7 @@ async def password_reset_confirm(reset_data: PasswordResetConfirm):
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: Dict[str, Any] = Depends(get_current_active_user)):
-    
+    logger.info(f"Returning user data to client: {current_user}")
     return current_user
 
 @router.put("/me", response_model=UserResponse)

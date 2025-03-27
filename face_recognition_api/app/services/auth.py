@@ -216,6 +216,9 @@ def get_user_by_id(user_id: str) -> UserResponse:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
+            # Debug logging to check the query
+            logger.info(f"Fetching user with ID: {user_id}")
+            
             cursor.execute(
                 """
                 SELECT 
@@ -231,7 +234,10 @@ def get_user_by_id(user_id: str) -> UserResponse:
             user_row = cursor.fetchone()
             if not user_row:
                 raise NotFoundError("User", user_id)
-                
+            
+            # Debug logging to check the results
+            logger.info(f"User row data: {user_row}")
+            
             cursor.execute(
                 """
                 SELECT g.group_id, g.name, g.description, g.created_at, g.updated_at
@@ -254,6 +260,7 @@ def get_user_by_id(user_id: str) -> UserResponse:
                 })
                 group_row = cursor.fetchone()
     
+            # Create the user dictionary with explicit column indexes
             user = {
                 "user_id": str(user_row[0]),
                 "username": user_row[1],
@@ -266,6 +273,9 @@ def get_user_by_id(user_id: str) -> UserResponse:
                 "updated_at": user_row[8],
                 "groups": groups
             }
+            
+            # Add debug logging for the final user object
+            logger.info(f"Constructed user object: {user}")
             
             return user
             

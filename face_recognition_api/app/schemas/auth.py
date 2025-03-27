@@ -100,14 +100,26 @@ class GroupResponse(GroupBase):
     class Config:
         from_attributes = True
 
-class UserResponse(UserBase):
+# class UserResponse(UserBase):
+#     user_id: str
+#     is_active: bool
+#     is_email_verified: bool
+#     groups: List[GroupResponse] = []
+#     created_at: datetime
+#     updated_at: datetime
+#     last_login: Optional[datetime] = None
+
+#     class Config:
+#         from_attributes = True
+    
+class UserResponse(BaseModel):
     user_id: str
+    username: str 
+    email: EmailStr
+    phone: Optional[str] = None
     is_active: bool
     is_email_verified: bool
     groups: List[GroupResponse] = []
     created_at: datetime
     updated_at: datetime
     last_login: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
