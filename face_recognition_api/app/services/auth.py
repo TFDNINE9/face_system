@@ -306,7 +306,7 @@ def create_tokens(user_id: str, user_groups: List[str], refresh_token_id: str, u
     except Exception as e:
         logger.error(f"Error creating tokens: {str(e)}", exc_info=True)
         raise DatabaseError(f"Failed to create tokens: {str(e)}", original_error=e)
-
+    
 @handle_service_error
 def refresh_access_token(refresh_token_id: str) -> TokenResponse:
     """
@@ -316,14 +316,14 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
         refresh_token_id: Refresh token ID
         
     Returns:
-        New token response
+        New token response with only a new access token
         
     Raises:
         ValidationError: If refresh token is invalid
         DatabaseError: If there's a database error
     """
     try:
-        with get_db_transaction() as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             
             cursor.execute(
@@ -359,36 +359,20 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
             groups = [row[0] for row in cursor.fetchall()]
             
             cursor.execute(
-                """SELECT username from auth_users where user_id = ?""", user_id
+                """SELECT username from auth_users where user_id = ?""", (user_id,)
             )
             
             username_row = cursor.fetchone()
-            if not  username_row:
-                raise
-            
             username = username_row[0] if username_row else None
-
-            new_token_id = create_refresh_token_id()
-            new_expires_at = get_refresh_token_expiry()
             
-            cursor.execute(
-                """
-                INSERT INTO auth_refresh_tokens (
-                    token_id, user_id, expires_at
-                ) VALUES (?, ?, ?)
-                """,
-                (new_token_id, user_id, new_expires_at)
-            )
-
-            cursor.execute(
-                """
-                UPDATE auth_refresh_tokens
-                SET is_revoked = 1, updated_at = SYSUTCDATETIME()
-                WHERE token_id = ?
-                """,
-                (refresh_token_id,)
-            )
-
+            token_data = {
+                "sub": username,
+                "uid": user_id,
+                "groups": groups
+            }
+            
+            access_token = create_access_token(token_data)
+            
             cursor.execute(
                 """
                 INSERT INTO auth_audit_logs (
@@ -400,7 +384,12 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
             
             conn.commit()
             
-            return create_tokens(user_id, groups, new_token_id, username)
+            return {
+                "access_token": access_token,
+                "refresh_token": refresh_token_id,
+                "token_type": "bearer",
+                "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+            }
             
     except ValidationError:
         raise

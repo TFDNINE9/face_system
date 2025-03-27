@@ -1,19 +1,15 @@
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
-from typing import Optional, List, Dict, Any
+from jwt.exceptions import ExpiredSignatureError
+from typing import List, Dict, Any
 import logging
-from ..util.auth import decode_token
+from ..util.auth import decode_token, jwt_token_header
 from ..services.auth import get_user_by_id
-from ..database import get_db_connection
 from ..schemas.auth import UserResponse
 
 logger = logging.getLogger(__name__)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
+async def get_current_user(token: str = Depends(jwt_token_header)) ->  Dict[str, Any]:
     """
     Get the current authenticated user from a JWT token.
     

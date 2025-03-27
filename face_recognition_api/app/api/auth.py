@@ -1,3 +1,4 @@
+from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from ..schemas.auth import (
@@ -9,6 +10,7 @@ from ..services.auth import (
     logout_user, change_password, request_password_reset, reset_password,
     verify_email, update_user
 )
+from ..config import settings
 from ..utils import create_response
 from ..dependencies.auth import get_current_user, get_current_active_user, is_admin
 
@@ -23,10 +25,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     try:
         user, refresh_token_id = authenticate_user(form_data.username, form_data.password)
         
-        # Get user groups
         user_groups = [group["name"] for group in user["groups"]]
         
-        # Create tokens
         tokens = create_tokens(user["user_id"], user_groups, refresh_token_id, user["username"])
         
         headers = {
@@ -120,11 +120,9 @@ async def password_reset_confirm(reset_data: PasswordResetConfirm):
         )
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: UserResponse = Depends(get_current_active_user)):
+async def get_me(current_user: Dict[str, Any] = Depends(get_current_active_user)):
     
-    user_model = UserResponse(**current_user)
-    """Get current user profile."""
-    return user_model
+    return current_user
 
 @router.put("/me", response_model=UserResponse)
 async def update_me(

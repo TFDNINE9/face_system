@@ -10,13 +10,14 @@ from .config import settings
 from .api.routes import api_router
 from .utils import create_response
 from .services.error_handling import ServiceError
+from fastapi.openapi.utils import get_openapi
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 def create_app() -> FastAPI:
     
@@ -28,7 +29,37 @@ def create_app() -> FastAPI:
         redoc_url="/redoc"
     )
     
-    # Add CORS middleware
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        
+        openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        
+        openapi_schema["components"]["securitySchemes"] = {
+            "JwtToken": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "Jwt-Token",
+                "description": "Enter your JWT token"
+            }
+        }
+
+        openapi_schema.pop("security", None)
+        
+        for route in openapi_schema['paths'].values():
+            for method in route.values():
+                if method.get('operationId') and 'auth' not in method.get('operationId', '').lower():
+                    method['security'] = [{"JwtToken": []}]
+        
+        app.openapi_schema = openapi_schema
+        return app.openapi_schema
+        
+    
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -37,14 +68,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
-    # Mount static directories
     app.mount("/storage", StaticFiles(directory=settings.STORAGE_DIR), name="storage")
     app.mount("/temp", StaticFiles(directory=settings.TEMP_DIR), name="temp")
     
-    # Include API routes
+
     app.include_router(api_router)
     
-    # Root endpoint
+    app.openapi = custom_openapi
+    
+
     @app.get("/")
     async def root():
         return create_response({
@@ -52,7 +84,7 @@ def create_app() -> FastAPI:
             "status": "operational"
         })
     
-    # Exception handlers
+
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError):
         """Handle service-specific errors with appropriate status codes and formatting."""
