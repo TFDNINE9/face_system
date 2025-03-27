@@ -1,9 +1,12 @@
 import logging
 import uuid
 from fastapi import HTTPException, status
-from ..database import get_db_connection
+
+from face_recognition_api.app.services.auth import get_user_by_id
+from ..database import get_db_connection, get_db_transaction
 from ..schemas.customer import CustomerCreate, CustomerUpdate
 from .error_handling import (
+    ConflictError,
     handle_service_error, 
     NotFoundError, 
     DatabaseError,
@@ -235,3 +238,130 @@ async def delete_customer(customer_id: str):
     except Exception as e:
         logger.error(f"Error deleting customer: {str(e)}", exc_info=True)
         raise DatabaseError(f"Failed to delete customer: {str(e)}", original_error=e)
+    
+    
+@handle_service_error
+async def assign_user_to_customer(user_id:str, customer_id: str):
+    try:
+        try:
+            uuid.UUID(user_id)
+            uuid.UUID(customer_id)
+        except ValueError:
+            raise ValidationError(
+            "Invalid UUID format for user_id or customer_id",
+            details={"user_id": user_id, "customer_id": customer_id}
+            )
+        
+        with get_db_transaction() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT 1 FROM auth_users WHERE user_id = ?", (user_id,)
+            )
+            
+            if not cursor.fetchone():
+                raise NotFoundError("User", user_id)
+            
+            cursor.execute(
+                "SELECT 1 FROM customers WHERE customer_id = ?", (customer_id,)
+            )
+            
+            if not cursor.fetchone():
+                raise NotFoundError("Customer", customer_id)
+            
+            cursor.execute(
+                "SELECT customer_id FROM auth_users WHERE user_id = ?", (user_id,)
+            )
+            
+            current_customer = cursor.fetchone()
+            if current_customer and current_customer[0] and current_customer[0] != customer_id:
+                raise ConflictError(
+                    "User is already assigned to a different customer",
+                    details={"user_id": user_id, "current_customer_id": current_customer[0]}
+                )
+                
+            cursor.execute(
+                """UPDATE auth_users SET customer_id = ?, updated_at = SYSUTCDATETIME() WHERE user_id = ? """, (customer_id, user_id, )
+            )
+            
+            cursor.execute(
+                """SELECT g.group_id FROM auth_groups g WHERE g.name = 'user' """
+            )
+            
+            user_group_row = cursor.fetchone()
+            
+            if user_group_row:
+                user_group_id = user_group_row[0]
+                
+                cursor.execute(
+                    """SELECT 1 FROM auth_user_groups WHERE user_id = ? AND group_id = ? """, (user_id, user_group_id)
+                )
+                
+                if not cursor.fetchone():
+                    cursor.execute(
+                        """INSERT INTO auth_user_groups (user_id, group_id) VALUES (?,?)""", (user_id, user_group_id)
+                    )
+                    
+            cursor.execute(
+                """INSERT INTO auth_audit_logs(user_id, event_type,details) VALUES (?,?,?)""", (user_id, "customer_assignment", f"User asssigned to customer {customer_id}")
+            )
+            
+            cursor.commit()
+            
+            user = get_user_by_id(user_id)
+            
+            return user
+    except (NotFoundError, ValidationError, ConflictError):
+        raise
+    except Exception as e:
+        logger.error(f"Error assigning user to customer: {str(e)}", exc_info=True)
+        raise DatabaseError(f"Failed to assign user to customer: {str(e)}", original_error=e)
+    
+    
+@handle_service_error
+def remove_user_from_customer(user_id: str):
+    try:
+        try:
+            uuid.UUID(user_id)
+        except ValueError:
+            raise ValidationError(
+            "Invalid UUID format for user_id",
+            details={"user_id": user_id}
+            )
+        with get_db_transaction() as conn:
+            cursor = conn.cursor()
+            
+        cursor.execute(
+            "SELECT customer_id from auth_users where user_id = ?", (user_id)
+        )
+        user_row = cursor.fetchone()
+        if not user_row:
+            raise NotFoundError("User", user_id)
+        
+        if not user_row[0]:
+            raise ValidationError(
+                "User is not assigned to any customer",
+                details={"user_id",user_id}
+            )
+        previous_customer_id = user_row[0]
+        
+        cursor.execute(
+            """UPDATE auth_users SET cusomter_id = NULL, updated_at = SYSUTCDATETIME() WHERE user_id = ?""", (user_id)
+        )
+        
+        cursor.execute(
+            """INSERT INTO auth_audit_logs (user_id, event_type, detail) VALUES (?,?,?)""", (user_id, "customer_unassignment", f"User removed from customer {previous_customer_id}")
+        )
+            
+        conn.commit()
+        
+        user = get_user_by_id(user_id)
+        
+        return user   
+        
+    except (NotFoundError, ValidationError, ConflictError):
+        raise  
+    except Exception as e:
+        logger.error(f"Error removing user from customer: {str(e)}", exc_info=True)
+        raise DatabaseError(f"Failed to remove user from customer: {str(e)}", original_error=e)
+   

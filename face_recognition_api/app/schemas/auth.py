@@ -123,3 +123,5 @@ class UserResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_login: Optional[datetime] = None
+    customer_id: Optional[str] = None
+    

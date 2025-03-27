@@ -212,15 +212,12 @@ def get_user_by_id(user_id: str) -> UserResponse:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # Debug logging to check the query
-            logger.info(f"Fetching user with ID: {user_id}")
-            
             cursor.execute(
                 """
                 SELECT 
                     u.user_id, u.username, u.email, u.phone, 
                     u.is_active, u.is_email_verified, u.last_login,
-                    u.created_at, u.updated_at
+                    u.created_at, u.updated_at, u.customer_id
                 FROM auth_users u
                 WHERE u.user_id = ?
                 """,
@@ -248,12 +245,13 @@ def get_user_by_id(user_id: str) -> UserResponse:
                     "group_id": str(group_row[0]),
                     "name": group_row[1],
                     "description": group_row[2],
-                    "created_at": group_row[3],
-                    "updated_at": group_row[4]
+                    "created_at": group_row[3].isoformat() if group_row[3] else None,
+                    "updated_at": group_row[4].isoformat() if group_row[4] else None
                 })
                 group_row = cursor.fetchone()
-    
-            # Create the user dictionary with explicit column indexes
+                
+            customer_id = user_row[9]
+
             user = {
                 "user_id": str(user_row[0]),
                 "username": user_row[1],
@@ -261,10 +259,11 @@ def get_user_by_id(user_id: str) -> UserResponse:
                 "phone": user_row[3],
                 "is_active": bool(user_row[4]),
                 "is_email_verified": bool(user_row[5]),
-                "last_login": user_row[6],
-                "created_at": user_row[7],
-                "updated_at": user_row[8],
-                "groups": groups
+                "last_login": user_row[6].isoformat() if user_row[6] else None,
+                "created_at": user_row[7].isoformat() if user_row[7] else None,
+                "updated_at": user_row[8].isoformat() if user_row[8] else None,
+                "groups": groups,
+                "customer_id": str(customer_id) if customer_id else None
             }
             
             return user

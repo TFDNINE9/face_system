@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
+from pydantic import BaseModel
+
+from face_recognition_api.app.services.customer import assign_user_to_customer, remove_user_from_customer
 from ..dependencies.auth import is_admin
 from ..schemas.auth import (
     UserCreate, UserResponse, UserUpdate
@@ -9,6 +12,10 @@ from ..services.auth import (
     add_user_to_group, remove_user_from_group
 )
 from ..utils import create_response
+
+    
+class CustomerAssignment(BaseModel):
+    customer_id: str
 
 router = APIRouter(
     prefix="/users",
@@ -205,5 +212,34 @@ async def remove_from_group(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+        
+@router.post("/{user_id}/assign-customer", response_model=UserResponse)
+async def assign_to_customer(
+    user_id: str = Path(..., description="The ID of the user"),
+    assignment: CustomerAssignment = None,
+    admin_user: UserResponse = Depends(is_admin)
+):
+    try:
+        updated_user = await assign_user_to_customer(user_id, assignment.customer_id)
+        return create_response(body=updated_user)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+        
+@router.delete("/{user_id}/assign-customer", response_model=UserResponse)
+async def remove_from_customer(
+    user_id: str = Path(..., description="The ID of the user"),
+    admin_user: UserResponse = Depends(is_admin)
+):
+    try:
+        updated_user = await remove_user_from_customer(user_id)
+        return create_response(body=updated_user)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
