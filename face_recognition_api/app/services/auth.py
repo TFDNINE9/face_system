@@ -116,20 +116,6 @@ def register_user(user_data: UserCreate) -> UserResponse:
 
 @handle_service_error
 def authenticate_user(username_or_email: str, password: str) -> Tuple[UserResponse, str]:
-    """
-    Authenticate a user by username/email and password.
-    
-    Args:
-        username_or_email: Username or email
-        password: Password
-        
-    Returns:
-        Tuple of (user_data, refresh_token_id)
-        
-    Raises:
-        ValidationError: If credentials are invalid
-        DatabaseError: If there's a database error
-    """
     try:
         with get_db_transaction() as conn:
             cursor = conn.cursor()
@@ -156,23 +142,33 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                 raise ValidationError("User account is disabled")
                 
             try:
-                token_id = create_refresh_token_id()
-                expires_at = get_refresh_token_expiry()
                 
-                cursor.execute(
-                    """
-                    INSERT INTO auth_refresh_tokens (
-                        token_id, user_id, expires_at
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (token_id, user_id, expires_at)
-                )
+                cursor.execute("""SELECT token_id, expires_at FROM auth_refresh_tokens WHERE user_id = ? AND is_revoked = 0 AND expires_at > SYSUTCDATETIME() ORDER BY expires_at DESC""", (user_id,))
+                
+                existing_token_row = cursor.fetchone()
+                
+                if existing_token_row:
+                    token_id = existing_token_row[0]
+                    logger.info(f"Using existing refresh token for user {user_id}")
+                else:
+                    token_id = create_refresh_token_id()
+                    expires_at = get_refresh_token_expiry()
+                    
+                    cursor.execute(
+                        """
+                        INSERT INTO auth_refresh_tokens (
+                            token_id, user_id, expires_at
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (token_id, user_id, expires_at)
+                    )
+                    logger.info(f"Created new refresh token for user {user_id}")
                 
                 cursor.execute(
                     "UPDATE auth_users SET last_login = SYSUTCDATETIME() WHERE user_id = ?",
                     (user_id,)
                 )
-                
+                                
                 cursor.execute(
                     """
                     INSERT INTO auth_audit_logs (
@@ -234,10 +230,7 @@ def get_user_by_id(user_id: str) -> UserResponse:
             user_row = cursor.fetchone()
             if not user_row:
                 raise NotFoundError("User", user_id)
-            
-            # Debug logging to check the results
-            logger.info(f"User row data: {user_row}")
-            
+                        
             cursor.execute(
                 """
                 SELECT g.group_id, g.name, g.description, g.created_at, g.updated_at
@@ -273,9 +266,6 @@ def get_user_by_id(user_id: str) -> UserResponse:
                 "updated_at": user_row[8],
                 "groups": groups
             }
-            
-            # Add debug logging for the final user object
-            logger.info(f"Constructed user object: {user}")
             
             return user
             
