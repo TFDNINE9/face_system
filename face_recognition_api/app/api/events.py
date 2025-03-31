@@ -36,6 +36,15 @@ async def list_events(
     
     return create_response(body=events)
 
+@router.get("/{customer_id}", response_model=list[EventResponse])
+async def list_event_by_customer_id(
+    customer_id : str = Path(..., Depends(get_current_active_user)),
+    current_user: UserResponse = Depends(has_group(['admin', 'user']))
+):
+    event_data = await get_events_by_customer(customer_id)
+    
+    return create_response(body=event_data)
+    
 @router.get("/{event_id}", response_model=EventResponse)
 async def get_event_by_id(
     event_id : str = Path(..., description="The ID of the event"),

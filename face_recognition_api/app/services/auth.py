@@ -149,7 +149,6 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                 
                 if existing_token_row:
                     token_id = existing_token_row[0]
-                    logger.info(f"Using existing refresh token for user {user_id}")
                 else:
                     token_id = create_refresh_token_id()
                     expires_at = get_refresh_token_expiry()
@@ -162,7 +161,6 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                         """,
                         (token_id, user_id, expires_at)
                     )
-                    logger.info(f"Created new refresh token for user {user_id}")
                 
                 cursor.execute(
                     "UPDATE auth_users SET last_login = SYSUTCDATETIME() WHERE user_id = ?",

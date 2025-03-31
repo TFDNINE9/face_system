@@ -124,7 +124,6 @@ async def password_reset_confirm(reset_data: PasswordResetConfirm):
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: Dict[str, Any] = Depends(get_current_active_user)):
-    logger.info(f"Returning user data to client: {current_user}")
     return current_user
 
 @router.put("/me", response_model=UserResponse)

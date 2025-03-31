@@ -103,8 +103,7 @@ async def get_current_active_user(current_user: UserResponse = Depends(get_curre
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user"
-        )
-    logger.info(f"Active user data: {current_user}")    
+        ) 
     return current_user
 
 def has_group(required_groups: List[str]):
