@@ -20,30 +20,28 @@ router = APIRouter(
 )
 
 @router.get("/", response_model=list[EventResponse])
-async def list_events(
-    customer_id: str = Query(None, description="Filter events by customer ID"),
-    current_user: UserResponse = Depends(get_current_active_user)
-):
+async def list_events(current_user: UserResponse = Depends(get_current_active_user)):
     """
-    List all events or filter by customer ID.
+    List events based on user permissions.
+    
+    For admins: Lists all events
+    For users: Lists only events for their assigned customer
     
     Requires authentication.
     """
-    if customer_id:
-        events = await get_events_by_customer(customer_id)
-    else:
+    user_groups = [group["name"] for group in current_user["groups"]]
+    is_admin_user = "admin" in user_groups
+    
+    if is_admin_user:
         events = await get_all_events()
+    else:
+        if not current_user["customer_id"]:
+            return create_response(body=[])
+            
+        events = await get_events_by_customer(current_user["customer_id"])
     
     return create_response(body=events)
 
-@router.get("/{customer_id}", response_model=list[EventResponse])
-async def list_event_by_customer_id(
-    customer_id : str = Path(..., Depends(get_current_active_user)),
-    current_user: UserResponse = Depends(has_group(['admin', 'user']))
-):
-    event_data = await get_events_by_customer(customer_id)
-    
-    return create_response(body=event_data)
     
 @router.get("/{event_id}", response_model=EventResponse)
 async def get_event_by_id(

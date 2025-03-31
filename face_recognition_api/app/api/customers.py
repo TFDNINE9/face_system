@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Response
 from ..schemas.auth import UserResponse
 from ..dependencies.auth import get_current_active_user, is_admin
 from ..schemas.customer import CustomerCreate, CustomerUpdate, CustomerResponse
@@ -26,7 +26,20 @@ async def get_customers(current_user: UserResponse = Depends(is_admin)):
     return create_response(body=customers)
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
-async def get_customer_by_id(customer_id: str = Path(..., description="The ID of the customer to get"), current_user: UserResponse = Depends(get_current_active_user)):
+async def get_customer_by_id(
+    customer_id: str = Path(..., description="The ID of the customer to get"),
+    current_user: UserResponse = Depends(get_current_active_user)):
+    
+    user_groups = [group["name"] for group in current_user["groups"]]
+    is_admin_user = "admin" in user_groups
+    
+    if not is_admin_user:
+        if not current_user["customer_id"] or current_user["customer_id"] != customer_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to view this customer"
+            )
+    
     customer = await get_customer(customer_id)
     return create_response(body=customer)
 
@@ -45,8 +58,19 @@ async def create_new_customer(customer_data: CustomerCreate, current_user: UserR
 async def update_existing_customer(
     customer_id: str, 
     customer_data: CustomerUpdate,
-    current_user: UserResponse = Depends(is_admin)
+    current_user: UserResponse = Depends(get_current_active_user)
 ):
+    user_groups = [group["name"] for group in current_user["groups"]]
+    is_admin_user = "admin" in user_groups
+    
+    
+    if not is_admin_user:
+        if not current_user["customer_id"] or current_user["customer_id"] != customer_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="YOU don't have permission to update this customer"
+            )
+    
     updated_customer = await update_customer(customer_id, customer_data)
     return create_response(body=updated_customer)
 

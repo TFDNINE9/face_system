@@ -325,43 +325,49 @@ def remove_user_from_customer(user_id: str):
             uuid.UUID(user_id)
         except ValueError:
             raise ValidationError(
-            "Invalid UUID format for user_id",
-            details={"user_id": user_id}
+                "Invalid UUID format for user_id",
+                details={"user_id": user_id}
             )
+            
+        # First, get user and validate they have a customer
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT customer_id FROM auth_users WHERE user_id = ?", (user_id,)
+            )
+            
+            user_row = cursor.fetchone()
+            if not user_row:
+                raise NotFoundError("User", user_id)
+            
+            if not user_row[0]:
+                raise ValidationError(
+                    "User is not assigned to any customer",
+                    details={"user_id": user_id}
+                )
+                
+            previous_customer_id = user_row[0]
+        
+        # Then, perform the update in a separate transaction
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
-        cursor.execute(
-            "SELECT customer_id from auth_users where user_id = ?", (user_id)
-        )
-        user_row = cursor.fetchone()
-        if not user_row:
-            raise NotFoundError("User", user_id)
-        
-        if not user_row[0]:
-            raise ValidationError(
-                "User is not assigned to any customer",
-                details={"user_id",user_id}
+            cursor.execute(
+                """UPDATE auth_users SET customer_id = NULL, updated_at = SYSUTCDATETIME() WHERE user_id = ?""", 
+                (user_id,)
             )
-        previous_customer_id = user_row[0]
-        
-        cursor.execute(
-            """UPDATE auth_users SET cusomter_id = NULL, updated_at = SYSUTCDATETIME() WHERE user_id = ?""", (user_id)
-        )
-        
-        cursor.execute(
-            """INSERT INTO auth_audit_logs (user_id, event_type, detail) VALUES (?,?,?)""", (user_id, "customer_unassignment", f"User removed from customer {previous_customer_id}")
-        )
             
-        conn.commit()
+            cursor.execute(
+                """INSERT INTO auth_audit_logs (user_id, event_type, details) VALUES (?, ?, ?)""", 
+                (user_id, "customer_unassignment", f"User removed from customer {previous_customer_id}")
+            )
         
+        # Finally, get the updated user after the transaction is complete
         user = get_user_by_id(user_id)
-        
-        return user   
-        
+        return user
+            
     except (NotFoundError, ValidationError, ConflictError):
         raise  
     except Exception as e:
         logger.error(f"Error removing user from customer: {str(e)}", exc_info=True)
         raise DatabaseError(f"Failed to remove user from customer: {str(e)}", original_error=e)
-   

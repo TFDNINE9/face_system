@@ -236,7 +236,7 @@ async def remove_from_customer(
     admin_user: UserResponse = Depends(is_admin)
 ):
     try:
-        updated_user = await remove_user_from_customer(user_id)
+        updated_user = remove_user_from_customer(user_id)
         return create_response(body=updated_user)
     except Exception as e:
         raise HTTPException(
