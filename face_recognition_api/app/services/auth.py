@@ -281,6 +281,7 @@ def create_tokens(user_id: str, user_groups: List[str], refresh_token_id: str, u
         user_id: User ID
         user_groups: List of user group names
         refresh_token_id: Refresh token ID
+        username: Username
         
     Returns:
         Token response with access and refresh tokens
@@ -385,7 +386,7 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
                 "access_token": access_token,
                 "refresh_token": refresh_token_id,
                 "token_type": "bearer",
-                "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+                "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
             }
             
     except ValidationError:
@@ -413,7 +414,9 @@ def logout_user(user_id: str, refresh_token_id: str) -> None:
             cursor.execute(
                 """
                 UPDATE auth_refresh_tokens
-                SET is_revoked = 1, updated_at = SYSUTCDATETIME()
+                SET is_revoked = 1, 
+                expires_at = SYSUTCDATETIME(),
+                updated_at = SYSUTCDATETIME()
                 WHERE token_id = ? AND user_id = ?
                 """,
                 (refresh_token_id, user_id)

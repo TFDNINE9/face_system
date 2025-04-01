@@ -41,11 +41,11 @@ def create_app() -> FastAPI:
         )
         
         openapi_schema["components"]["securitySchemes"] = {
-            "JwtToken": {
-                "type": "apiKey",
-                "in": "header",
-                "name": "Jwt-Token",
-                "description": "Enter your JWT token"
+            "BearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "Enter your JWT bearer token"
             }
         }
 
@@ -57,10 +57,10 @@ def create_app() -> FastAPI:
                 is_excluded = path in ["/auth/login", "health", "/password-reset-confirm", "/"]
                 
                 if not(is_public or is_excluded):
-                    operation['security'] = [{"JwtToken": []}]
+                    operation['security'] = [{"BearerAuth": []}]
                     
                 if path.startswith("/auth/") and path not in ["/auth/login", "/auth/password-reset-confirm"]:
-                    operation['security'] = [{"JwtToken": []}]
+                    operation['security'] = [{"BearerAuth": []}]
                 
         
         app.openapi_schema = openapi_schema

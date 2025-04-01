@@ -3,13 +3,13 @@ from jose import JWTError
 from jwt.exceptions import ExpiredSignatureError
 from typing import List, Dict, Any
 import logging
-from ..util.auth import decode_token, jwt_token_header
+from ..util.auth import decode_token, security_scheme
 from ..services.auth import get_user_by_id
 from ..schemas.auth import UserResponse
 
 logger = logging.getLogger(__name__)
 
-async def get_current_user(token: str = Depends(jwt_token_header)) ->  Dict[str, Any]:
+async def get_current_user(token: str = Depends(security_scheme)) ->  Dict[str, Any]:
     """
     Get the current authenticated user from a JWT token.
     
@@ -38,8 +38,9 @@ async def get_current_user(token: str = Depends(jwt_token_header)) ->  Dict[str,
         raise credentials_exception
     
     try:
+        token_str = token.credentials
         
-        payload = decode_token(token)
+        payload = decode_token(token_str)
         
         username: str = payload.get("sub")
         if username is None:
