@@ -143,17 +143,31 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
                 
             try:
                 
-                cursor.execute("""SELECT token_id, expires_at FROM auth_refresh_tokens WHERE user_id = ? AND is_revoked = 0 AND expires_at > SYSUTCDATETIME() ORDER BY expires_at DESC""", (user_id,))
+                ### THIS IS REUSE REFRESH token ###
                 
-                existing_token_row = cursor.fetchone()
+                # cursor.execute("""SELECT token_id, expires_at FROM auth_refresh_tokens WHERE user_id = ? AND is_revoked = 0 AND expires_at > SYSUTCDATETIME() ORDER BY expires_at DESC""", (user_id,))
                 
-                if existing_token_row:
-                    token_id = existing_token_row[0]
-                else:
-                    token_id = create_refresh_token_id()
-                    expires_at = get_refresh_token_expiry()
+                # existing_token_row = cursor.fetchone()
+                
+                # if existing_token_row:
+                #     token_id = existing_token_row[0]
+                # else:
+                #     token_id = create_refresh_token_id()
+                #     expires_at = get_refresh_token_expiry()
+                
+                
+                ### This is gen new rf token after login and terminate the old refresh token
+                
+                # cursor.execute("""
+                #     UPDATE auth_refresh_tokens 
+                #     SET is_revoked = 1, updated_at = SYSUTCDATETIME() 
+                #     WHERE user_id = ? AND is_revoked = 0
+                # """, (user_id,))
+                
+                token_id = create_refresh_token_id()
+                expires_at = get_refresh_token_expiry()
                     
-                    cursor.execute(
+                cursor.execute(
                         """
                         INSERT INTO auth_refresh_tokens (
                             token_id, user_id, expires_at
@@ -339,7 +353,7 @@ def refresh_access_token(refresh_token_id: str) -> TokenResponse:
                 
             user_id, is_revoked, expires_at = token_row
             if is_revoked:
-                raise ValidationError("Refresh token has been revoked")
+                raise ValidationError("This refresh token has been revoked - please login again")
 
             if expires_at < datetime.now():
                 raise ValidationError("Refresh token has expired")
