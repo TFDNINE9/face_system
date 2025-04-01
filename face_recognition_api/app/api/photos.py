@@ -19,12 +19,11 @@ router = APIRouter(
     tags=["Photos"],
 )
 
-@router.get("/events/{event_id}/photos", response_model=PaginatedPhotoResponse)
+@router.get("/events/{event_id}/photos", response_model=PaginatedPhotoResponse,tags=["public"])
 async def list_event_photos(
     event_id: str = Path(..., description="The ID of the event"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Number of photos per page"),
-    current_user: UserResponse = Depends(get_current_active_user)
 ):
     """
     List photos for an event.
@@ -51,11 +50,10 @@ async def upload_images_to_event(
         status_code=status.HTTP_201_CREATED
     )
 
-@router.get("/events/{event_id}/photos/{photo_id}", response_model=PhotoResponse)
+@router.get("/events/{event_id}/photos/{photo_id}", response_model=PhotoResponse, tags=["public"])
 async def get_photo_by_id(
     event_id: str = Path(..., description="The ID of the event"),
     photo_id: str = Path(..., description="The ID of the photo"),
-    current_user: UserResponse = Depends(get_current_active_user)
 ):
     """
     Get photo by ID.
@@ -65,12 +63,11 @@ async def get_photo_by_id(
     photo_data = get_photo(event_id, photo_id)
     return create_response(body=photo_data)
 
-@router.get("/events/{event_id}/photos/{photo_id}/file")
+@router.get("/events/{event_id}/photos/{photo_id}/file", tags=["public"])
 async def get_photo_file(
     event_id: str = Path(..., description="The ID of the event"),
     photo_id: str = Path(..., description="The ID of the photo"),
     size: int = Query(None, ge=16, le=2048, description="Width of the resized image in pixels"),
-    current_user: UserResponse = Depends(get_current_active_user)
 ):
     """
     Get photo file or resized version.
@@ -100,11 +97,10 @@ async def get_photo_file(
         media_type=media_type
     )
     
-@router.get("/events/{event_id}/representatives/{face_id}/file")
+@router.get("/events/{event_id}/representatives/{face_id}/file", tags=["public"])
 async def get_face_photo_file(
     event_id: str = Path(..., description="The ID of the event"),
     face_id: str = Path(..., description="The ID of face photo"),
-    current_user: UserResponse = Depends(get_current_active_user)
 ):
     """
     Get representative face photo file.

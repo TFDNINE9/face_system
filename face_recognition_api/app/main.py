@@ -53,9 +53,12 @@ def create_app() -> FastAPI:
         
         for path, path_item in openapi_schema['paths'].items():
             for method, operation in path_item.items():
-                if not (path == "/auth/login" or path == "/health" or path == "/password-reset-confirm"):
-                    operation['security'] = [{"JwtToken": []}]
+                is_public = "public" in operation.get("tags", [])
+                is_excluded = path in ["/auth/login", "health", "/password-reset-confirm", "/"]
                 
+                if not(is_public or is_excluded):
+                    operation['security'] = [{"JwtToken": []}]
+                    
                 if path.startswith("/auth/") and path not in ["/auth/login", "/auth/password-reset-confirm"]:
                     operation['security'] = [{"JwtToken": []}]
                 
