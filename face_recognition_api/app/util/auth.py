@@ -9,7 +9,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-jwt_token_header = APIKeyHeader(name="Jwt-Token", auto_error=False)
+from fastapi.security import OAuth2PasswordBearer, HTTPBearer
+
+security_scheme = HTTPBearer(auto_error=False)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -27,11 +29,10 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     else:
         expire = datetime.now() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    issuance_time = datetime.now() - timedelta(seconds=30)
     
     to_encode.update({
         "exp": expire,
-        "iat": issuance_time,
+        "iat": datetime.now(timezone.utc),
         "jti": str(uuid.uuid4()),
         "type": "access"
     })
