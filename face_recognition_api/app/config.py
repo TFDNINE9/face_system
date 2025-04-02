@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = os.getenv("EMAIL_FROM", "noreply@example.com")
     EMAIL_FROM_NAME: str = os.getenv("EMAIL_FROM_NAME", "Face Recognition System")
     
+        # Rate Limiting Settings
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://:topfee4262@localhost:6379/0")
+    RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "True").lower() == "true"
+    
+    # IP Blacklisting
+    IP_BLACKLIST_ENABLED: bool = os.getenv("IP_BLACKLIST_ENABLED", "True").lower() == "true"
+    MAX_FAILED_ATTEMPTS: int = int(os.getenv("MAX_FAILED_ATTEMPTS", "5"))
+    BLACKLIST_DURATION_MINUTES: int = int(os.getenv("BLACKLIST_DURATION_MINUTES", "30"))
+    
     @property
     def DB_CONNECTION_STRING(self) -> str:
    

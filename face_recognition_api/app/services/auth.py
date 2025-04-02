@@ -7,12 +7,16 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 
 import jwt
 
+from ..util.ip_security import (
+    IPSecurity
+)
+
 from ..database import get_db_connection, get_db_transaction
 from ..schemas.auth import UserCreate, UserUpdate, TokenResponse, UserResponse
 from ..util.auth import (
     hash_password, verify_password, create_access_token, 
     create_refresh_token_id, get_refresh_token_expiry,
-    get_password_reset_token_expiry, get_email_verification_token_expiry
+    get_password_reset_token_expiry, get_email_verification_token_expiry, 
 )
 from ..config import settings
 from .error_handling import (
@@ -115,8 +119,37 @@ def register_user(user_data: UserCreate) -> UserResponse:
         raise DatabaseError(f"Failed to register user: {str(e)}", original_error=e)
 
 @handle_service_error
-def authenticate_user(username_or_email: str, password: str) -> Tuple[UserResponse, str]:
+async def authenticate_user(username_or_email: str, password: str, client_ip: Optional[str] = None) -> Tuple[UserResponse, str]:
+    """
+    Authenticate a user with username/email and password.
+    
+    Args:
+        username_or_email: Username or email to authenticate
+        password: User's password
+        client_ip: Optional client IP address for security tracking
+        
+    Returns:
+        Tuple of (user data, refresh token ID)
+        
+    Raises:
+        ValidationError: If credentials are invalid
+        DatabaseError: If there's a database error
+    """
     try:
+        # Check if IP is blacklisted before attempting authentication
+        if client_ip and settings.IP_BLACKLIST_ENABLED:
+            ip_security = IPSecurity()
+            is_blacklisted = await ip_security.is_ip_blacklisted(client_ip)
+            
+            if is_blacklisted:
+                blacklist_details = await ip_security.get_blacklist_details(client_ip)
+                retry_after = blacklist_details["remaining_seconds"] if blacklist_details else 300
+                
+                raise ValidationError(
+                    "Your IP address has been temporarily blocked due to multiple failed login attempts.",
+                    details={"retry_after": retry_after}
+                )
+        
         with get_db_transaction() as conn:
             cursor = conn.cursor()
             
@@ -130,71 +163,82 @@ def authenticate_user(username_or_email: str, password: str) -> Tuple[UserRespon
             cursor.execute(query, (username_or_email,))
             user_row = cursor.fetchone()
             
-            if not user_row:
-                raise ValidationError("Invalid credentials")
+            # Handle invalid username/email or password
+            if not user_row or not verify_password(password, user_row[1]):
+                # Record failed attempt if IP is provided
+                if client_ip and settings.IP_BLACKLIST_ENABLED:
+                    ip_security = IPSecurity()
+                    is_blacklisted, attempts = await ip_security.record_failed_attempt(client_ip)
+                    
+                    # Log the failed attempt
+                    logger.warning(
+                        f"Failed login attempt for '{username_or_email}' from IP {client_ip} "
+                        f"(Attempt {attempts}/{settings.MAX_FAILED_ATTEMPTS})"
+                    )
+                    
+                    # If IP just got blacklisted, include retry-after info
+                    if is_blacklisted:
+                        blacklist_details = await ip_security.get_blacklist_details(client_ip)
+                        retry_after = blacklist_details["remaining_seconds"] if blacklist_details else None
+                        raise ValidationError(
+                            "Your IP address has been temporarily blocked due to multiple failed login attempts.",
+                            details={"retry_after": retry_after}
+                        )
                 
+                raise ValidationError("Invalid credentials")
+            
             user_id, password_hash, is_active = user_row
             
-            if not verify_password(password, password_hash):
-                raise ValidationError("Invalid credentials")
-                
+            # Check if account is active
             if not is_active:
                 raise ValidationError("User account is disabled")
-                
+            
             try:
-                
-                ### THIS IS REUSE REFRESH token ###
-                
-                # cursor.execute("""SELECT token_id, expires_at FROM auth_refresh_tokens WHERE user_id = ? AND is_revoked = 0 AND expires_at > SYSUTCDATETIME() ORDER BY expires_at DESC""", (user_id,))
-                
-                # existing_token_row = cursor.fetchone()
-                
-                # if existing_token_row:
-                #     token_id = existing_token_row[0]
-                # else:
-                #     token_id = create_refresh_token_id()
-                #     expires_at = get_refresh_token_expiry()
-                
-                
-                ### This is gen new rf token after login and terminate the old refresh token
-                
-                # cursor.execute("""
-                #     UPDATE auth_refresh_tokens 
-                #     SET is_revoked = 1, updated_at = SYSUTCDATETIME() 
-                #     WHERE user_id = ? AND is_revoked = 0
-                # """, (user_id,))
-                
+                # Generate a new refresh token
                 token_id = create_refresh_token_id()
                 expires_at = get_refresh_token_expiry()
                     
                 cursor.execute(
-                        """
-                        INSERT INTO auth_refresh_tokens (
-                            token_id, user_id, expires_at
-                        ) VALUES (?, ?, ?)
-                        """,
-                        (token_id, user_id, expires_at)
-                    )
+                    """
+                    INSERT INTO auth_refresh_tokens (
+                        token_id, user_id, expires_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (token_id, user_id, expires_at)
+                )
                 
+                # Update last login time
                 cursor.execute(
                     "UPDATE auth_users SET last_login = SYSUTCDATETIME() WHERE user_id = ?",
                     (user_id,)
                 )
-                                
+                
+                # Log successful login
+                login_details = "Successful login"
+                if client_ip:
+                    login_details += f" from IP {client_ip}"
+                
                 cursor.execute(
                     """
                     INSERT INTO auth_audit_logs (
                         user_id, event_type, details
                     ) VALUES (?, ?, ?)
                     """,
-                    (user_id, "login", "Successful login")
+                    (user_id, "login", login_details)
                 )
+                
+                # Clear failed attempts for this IP
+                if client_ip and settings.IP_BLACKLIST_ENABLED:
+                    ip_security = IPSecurity()
+                    await ip_security.clear_failed_attempts(client_ip)
                 
                 conn.commit()
                 
+                # Get complete user info
                 user = get_user_by_id(user_id)
                 
                 return user, token_id
+                
             except jwt.PyJWTError as e:
                 logger.error(f"JWT error in authentication: {str(e)}")
                 raise ValidationError("Authentication failed due to token error")

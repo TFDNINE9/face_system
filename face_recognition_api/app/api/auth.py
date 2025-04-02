@@ -2,6 +2,8 @@ import logging
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
+
+from face_recognition_api.app.services.error_handling import ValidationError
 from ..schemas.auth import (
     UserCreate, UserResponse, TokenResponse, RefreshTokenReqeust,
     PasswordChange, PasswordReset, PasswordResetConfirm, UserUpdate
@@ -22,30 +24,112 @@ router = APIRouter(
     tags=["Authentication"],
 )
 
+# @router.post("/login", response_model=TokenResponse)
+# async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+#     """Login to get access token."""
+#     try:
+#         user, refresh_token_id = authenticate_user(form_data.username, form_data.password)
+        
+#         user_groups = [group["name"] for group in user["groups"]]
+        
+#         tokens = create_tokens(user["user_id"], user_groups, refresh_token_id, user["username"])
+        
+#         headers = {
+#             "Jwt-Token": tokens["access_token"],
+#             "Refresh-Token": tokens["refresh_token"]
+#         }
+        
+#         return create_response(body={"message":"Authentication successful"},
+#                                headers=headers
+#                                )
+#     except Exception as e:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED,
+#             detail=f"Invalid credentials exception: {e}",
+#             headers={"WWW-Authenticate": "Bearer"},
+#         )
+
+
+
+
 @router.post("/login", response_model=TokenResponse)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Login to get access token."""
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Login to get access token.
+    
+    This endpoint is rate-limited and monitors for brute force attempts.
+    Multiple failed attempts will trigger temporary IP blocking.
+    """
     try:
-        user, refresh_token_id = authenticate_user(form_data.username, form_data.password)
+        # Get client IP for security tracking
+        client_ip = get_client_ip(request)
+        
+        # Authenticate user with IP for security tracking
+        user, refresh_token_id = await authenticate_user(
+            form_data.username, 
+            form_data.password,
+            client_ip
+        )
         
         user_groups = [group["name"] for group in user["groups"]]
         
+        # Create tokens
         tokens = create_tokens(user["user_id"], user_groups, refresh_token_id, user["username"])
         
+        # Set response headers
         headers = {
             "Jwt-Token": tokens["access_token"],
             "Refresh-Token": tokens["refresh_token"]
         }
         
-        return create_response(body={"message":"Authentication successful"},
-                               headers=headers
-                               )
+        # Log successful login
+        logger.info(f"Successful login for user '{user['username']}' from IP {client_ip}")
+        
+        return create_response(
+            body={"message": "Authentication successful"},
+            headers=headers
+        )
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        # Log the error with client IP
+        logger.error(f"Login failed from IP {get_client_ip(request)}: {str(e)}")
+        
+        # Determine appropriate status code and message
+        status_code = status.HTTP_401_UNAUTHORIZED
+        detail = "Invalid credentials"
+        
+        # Extract more specific error message if available
+        if isinstance(e, ValidationError) and "retry_after" in getattr(e, "details", {}):
+            status_code = status.HTTP_403_FORBIDDEN
+            detail = str(e)
+        
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid credentials exception: {e}",
+            status_code=status_code,
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extract client IP address from request.
+    
+    Args:
+        request: FastAPI request
+        
+    Returns:
+        Client IP address
+    """
+    # Check for X-Forwarded-For header (when behind proxy)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # Use the first IP in the list (client IP)
+        return forwarded_for.split(",")[0].strip()
+    
+    # Fallback to direct client IP
+    return request.client.host if request.client else "unknown"
+
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(refresh_request: RefreshTokenReqeust):
@@ -65,24 +149,6 @@ async def refresh(refresh_request: RefreshTokenReqeust):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
-        )
-
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(
-    refresh_request: RefreshTokenReqeust,
-    current_user: UserResponse = Depends(get_current_active_user)
-):
-    """Logout and invalidate refresh token."""
-    try:
-        logout_user(current_user["user_id"], refresh_request.refresh_token)
-        return create_response(
-            body={},
-            status_code=status.HTTP_204_NO_CONTENT
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
         )
 
 @router.post("/password-change", status_code=status.HTTP_204_NO_CONTENT)

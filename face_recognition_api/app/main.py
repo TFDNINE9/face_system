@@ -66,6 +66,19 @@ def create_app() -> FastAPI:
         app.openapi_schema = openapi_schema
         return app.openapi_schema
         
+    app.openapi = custom_openapi
+    
+        # Add security middleware first (IP blacklisting)
+    if settings.IP_BLACKLIST_ENABLED:
+        from .middleware.security import SecurityMiddleware
+        app.add_middleware(SecurityMiddleware)
+        logger.info("Security middleware enabled")
+    
+    # Add rate limiting middleware
+    if settings.RATE_LIMIT_ENABLED:
+        from .middleware.rate_limit import RateLimitMiddleware, RateLimitConfig
+        app.add_middleware(RateLimitMiddleware, config=RateLimitConfig())
+        logger.info("Rate limiting middleware enabled")
     
     app.add_middleware(
         CORSMiddleware,
@@ -80,10 +93,7 @@ def create_app() -> FastAPI:
     
 
     app.include_router(api_router)
-    
-    app.openapi = custom_openapi
-    
-
+        
     @app.get("/")
     async def root():
         return create_response({
