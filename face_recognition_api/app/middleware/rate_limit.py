@@ -20,7 +20,7 @@ class RateLimitConfig:
         # Path-specific rate limits (override defaults)
         self.paths = {
             # Authentication endpoints - more strict
-            "/auth/login": {"max_requests": 5, "window_seconds": 60},
+            "/auth/login": {"max_requests": 10, "window_seconds": 120},
             "/auth/refresh": {"max_requests": 10, "window_seconds": 60},
             "/auth/password-reset": {"max_requests": 5, "window_seconds": 300},
             "/auth/password-reset-confirm": {"max_requests": 5, "window_seconds": 300},

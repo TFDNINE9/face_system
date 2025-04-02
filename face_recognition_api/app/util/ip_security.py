@@ -3,6 +3,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import asyncio
+from pyparsing import Any
 import redis.asyncio as redis
 from ..config import settings
 
@@ -129,30 +130,117 @@ class IPSecurity:
             logger.error(f"Error clearing failed attempts: {str(e)}")
             return False
     
-    async def get_failed_attempts(self, ip_address: str) -> int:
+    
+    async def get_all_blacklisted_ips(self) -> List[Dict[str, Any]]: #TODO: Change Import for "Any" if Got Error
         """
-        Get the current count of failed attempts for an IP.
+        Get all currently blacklisted IP addresses with their details.
         
-        Args:
-            ip_address: IP address to check
-            
         Returns:
-            Integer count of failed attempts
+            List of dictionaries containing IP and blacklist details
         """
-        if not settings.IP_BLACKLIST_ENABLED:
-            return 0
-            
-        redis_client = await self.get_redis()
-        attempts_key = f"ip_failed_attempts:{ip_address}"
-        
         try:
-            # Get the current count
-            count = await redis_client.get(attempts_key)
-            return int(count) if count else 0
+            redis_client = await self.get_redis()
+            blacklisted_ips = []
+            
+            # If using in-memory store, handle differently
+            if isinstance(redis_client, InMemoryStore):
+                # Scan in-memory data for blacklist keys
+                prefix = "ip_blacklist:"
+                for key in list(redis_client.data.keys()):
+                    if key.startswith(prefix):
+                        ip_address = key[len(prefix):]
+                        details = await self.get_blacklist_details(ip_address)
+                        if details:
+                            blacklisted_ips.append(details)
+                return blacklisted_ips
+                
+            # For Redis, use SCAN to get all ip_blacklist keys
+            cursor = b"0"
+            pattern = "ip_blacklist:*"
+            
+            while cursor:
+                cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
+                
+                for key in keys:
+                    ip_address = key.split(":")[-1]
+                    details = await self.get_blacklist_details(ip_address)
+                    if details:
+                        blacklisted_ips.append(details)
+                
+                # Exit if we've reached the end
+                if cursor == b"0":
+                    break
+            
+            return blacklisted_ips
+            
+        except Exception as e:
+            logger.error(f"Error getting blacklisted IPs: {str(e)}")
+            return []
+    
+    
+    async def get_all_failed_attempts(self) -> List[Dict[str, Any]]:
+        """
+        Get all IP addresses with failed login attempts.
+        
+        Returns:
+            List of dictionaries containing IP and attempt details
+        """
+        try:
+            redis_client = await self.get_redis()
+            failed_attempts = []
+            
+            # If using in-memory store, handle differently
+            if isinstance(redis_client, InMemoryStore):
+                # Scan in-memory data for failed attempts keys
+                prefix = "ip_failed_attempts:"
+                for key in list(redis_client.data.keys()):
+                    if key.startswith(prefix):
+                        ip_address = key[len(prefix):]
+                        count = int(redis_client.data.get(key, 0))
+                        ttl = await redis_client.ttl(key)
+                        blacklisted = await self.is_ip_blacklisted(ip_address)
+                        
+                        failed_attempts.append({
+                            "ip_address": ip_address,
+                            "attempts": count,
+                            "ttl": ttl,
+                            "blacklisted": blacklisted
+                        })
+                return failed_attempts
+                
+            # For Redis, use SCAN to get all ip_failed_attempts keys
+            cursor = b"0"
+            pattern = "ip_failed_attempts:*"
+            
+            while cursor:
+                cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
+                
+                for key in keys:
+                    ip_address = key.split(":")[-1]
+                    count = await redis_client.get(key)
+                    ttl = await redis_client.ttl(key)
+                    blacklisted = await self.is_ip_blacklisted(ip_address)
+                    
+                    failed_attempts.append({
+                        "ip_address": ip_address,
+                        "attempts": int(count) if count else 0,
+                        "ttl": ttl,
+                        "blacklisted": blacklisted
+                    })
+                
+                # Exit if we've reached the end
+                if cursor == b"0":
+                    break
+            
+            # Sort by attempts (highest first)
+            failed_attempts.sort(key=lambda x: x["attempts"], reverse=True)
+            return failed_attempts
+            
         except Exception as e:
             logger.error(f"Error getting failed attempts: {str(e)}")
-            return 0
-    
+            return []
+
+
     async def get_blacklist_details(self, ip_address: str) -> Optional[Dict]:
         """
         Get details about a blacklisted IP.
@@ -183,6 +271,38 @@ class IPSecurity:
         except Exception as e:
             logger.error(f"Error getting blacklist details: {str(e)}")
             return None
+    
+    
+    async def clear_all_blacklisted_ips(self) -> Dict[str, Any]:
+        """
+        Clear all blacklisted IP addresses.
+        
+        Returns:
+            Dictionary with operation results
+        """
+        try:
+            blacklisted_ips = await self.get_all_blacklisted_ips()
+            cleared_count = 0
+            
+            for ip_data in blacklisted_ips:
+                ip_address = ip_data["ip_address"]
+                success = await self.unblacklist_ip(ip_address)
+                if success:
+                    cleared_count += 1
+            
+            return {
+                "success": True,
+                "cleared_count": cleared_count,
+                "total_count": len(blacklisted_ips)
+            }
+        except Exception as e:
+            logger.error(f"Error clearing all blacklisted IPs: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "cleared_count": 0
+            }
+        
             
     async def unblacklist_ip(self, ip_address: str) -> bool:
         """
@@ -307,6 +427,35 @@ class InMemoryStore:
     async def execute(self):
         """Execute pipeline commands."""
         return self.pipeline_results
+    
+    
+    async def scan(self, cursor=b"0", match=None, count=10):
+        """Simulate Redis SCAN command."""
+        self._cleanup()
+        
+        # Determine starting point
+        try:
+            start_idx = int(cursor.decode('utf-8'))
+        except (ValueError, AttributeError):
+            start_idx = 0
+        
+        keys = list(self.data.keys())
+        
+        # Filter by pattern if provided
+        if match:
+            import fnmatch
+            match_str = match.replace('*', '.*')
+            keys = [k for k in keys if fnmatch.fnmatch(k, match)]
+        
+        # Calculate pagination
+        end_idx = min(start_idx + count, len(keys))
+        result_keys = keys[start_idx:end_idx]
+        
+        # Calculate next cursor
+        next_cursor = b"0" if end_idx >= len(keys) else str(end_idx).encode()
+        
+        return next_cursor, result_keys
+        
     
     def __init__(self):
         self.data = {}

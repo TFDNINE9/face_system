@@ -212,3 +212,21 @@ async def update_me(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+        
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    refresh_request: RefreshTokenReqeust,
+    current_user: UserResponse = Depends(get_current_active_user)
+):
+    """Logout and invalidate refresh token."""
+    try:
+        logout_user(current_user["user_id"], refresh_request.refresh_token)
+        return create_response(
+            body={},
+            status_code=status.HTTP_204_NO_CONTENT
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
