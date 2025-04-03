@@ -5,7 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from face_recognition_api.app.services.error_handling import ValidationError
 from ..schemas.auth import (
-    UserCreate, UserResponse, TokenResponse, RefreshTokenReqeust,
+    UserCreate, UserLogin, UserResponse, TokenResponse, RefreshTokenReqeust,
     PasswordChange, PasswordReset, PasswordResetConfirm, UserUpdate
 )
 from ..services.auth import (
@@ -24,36 +24,8 @@ router = APIRouter(
     tags=["Authentication"],
 )
 
-# @router.post("/login", response_model=TokenResponse)
-# async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-#     """Login to get access token."""
-#     try:
-#         user, refresh_token_id = authenticate_user(form_data.username, form_data.password)
-        
-#         user_groups = [group["name"] for group in user["groups"]]
-        
-#         tokens = create_tokens(user["user_id"], user_groups, refresh_token_id, user["username"])
-        
-#         headers = {
-#             "Jwt-Token": tokens["access_token"],
-#             "Refresh-Token": tokens["refresh_token"]
-#         }
-        
-#         return create_response(body={"message":"Authentication successful"},
-#                                headers=headers
-#                                )
-#     except Exception as e:
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED,
-#             detail=f"Invalid credentials exception: {e}",
-#             headers={"WWW-Authenticate": "Bearer"},
-#         )
-
-
-
-
 @router.post("/login", response_model=TokenResponse)
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, login_data: UserLogin):
     """
     Login to get access token.
     
@@ -66,8 +38,8 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
         
         # Authenticate user with IP for security tracking
         user, refresh_token_id = await authenticate_user(
-            form_data.username, 
-            form_data.password,
+            login_data.username_or_email, 
+            login_data.password,
             client_ip
         )
         
