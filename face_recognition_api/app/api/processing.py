@@ -43,12 +43,12 @@ async def process_event(
         status_code=status.HTTP_202_ACCEPTED
     )
 
-@router.post("/events/{event_id}/search", response_model=SearchResponse)
+@router.post("/events/{event_id}/search", response_model=SearchResponse, tags=["public"])
 async def search_face(
     event_id: str = Path(..., description="The ID of the event"),
     file: UploadFile = File(..., description="Image file with the face to search for"),
-    threshold: float = Query(0.83, ge=0.5, le=1.0, description="Matching threshold (0.5 to 1.0)"),
-    current_user: UserResponse = Depends(get_current_active_user)
+    threshold: float = Query(0.83, ge=0.5, le=1.0, description="Matching threshold (0.5 to 1.0)")
+    # ,current_user: UserResponse = Depends(get_current_active_user)
 ):
     """
     Search for a face in an event.

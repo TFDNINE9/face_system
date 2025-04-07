@@ -1234,17 +1234,17 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-     
+            # Get total count of users
             cursor.execute("SELECT COUNT(*) FROM auth_users")
             total_count = cursor.fetchone()[0]
             
- 
+            # Fetch all users with pagination
             cursor.execute(
                 """
                 SELECT 
                     u.user_id, u.username, u.email, u.phone, 
                     u.is_active, u.is_email_verified, u.last_login,
-                    u.created_at, u.updated_at
+                    u.created_at, u.updated_at, u.customer_id
                 FROM auth_users u
                 ORDER BY u.username
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
@@ -1253,10 +1253,16 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
             )
             
             users = []
-            while row := cursor.fetchone():
+            rows = cursor.fetchall()  # Fetch all rows at once
+            
+            if not rows:
+                return []  # Return empty list if no users found
+                
+            # Process each user row
+            for row in rows:
                 user_id = row[0]
                 
-           
+                # Get groups for this user
                 cursor.execute(
                     """
                     SELECT g.group_id, g.name, g.description, g.created_at, g.updated_at
@@ -1267,9 +1273,11 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                     (user_id,)
                 )
                 
+                # Collect all groups for this user
                 groups = []
-                group_row = cursor.fetchone()
-                while group_row:
+                group_rows = cursor.fetchall()  # Fetch all group rows at once
+                
+                for group_row in group_rows:
                     groups.append({
                         "group_id": str(group_row[0]),
                         "name": group_row[1],
@@ -1277,9 +1285,8 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                         "created_at": group_row[3].isoformat() if group_row[3] else None,
                         "updated_at": group_row[4].isoformat() if group_row[4] else None
                     })
-                    group_row = cursor.fetchone()
                 
-            
+                # Create user object with all required fields
                 user = {
                     "user_id": str(user_id),
                     "username": row[1],
@@ -1290,6 +1297,7 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                     "last_login": row[6].isoformat() if row[6] else None,
                     "created_at": row[7].isoformat() if row[7] else None,
                     "updated_at": row[8].isoformat() if row[8] else None,
+                    "customer_id": str(row[9]) if row[9] else None,
                     "groups": groups
                 }
                 

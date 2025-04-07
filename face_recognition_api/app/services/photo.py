@@ -137,13 +137,17 @@ async def upload_event_images(event_id: str, files: list[UploadFile]):
                     details={"event_status": event_status}
                 )
             
-            event_dir = os.path.join(
-                settings.STORAGE_DIR,
-                "customers",
-                str(customer_id),
-                "events",
-                str(event_id)
-            )
+            # event_dir = os.path.join(
+            #     settings.STORAGE_DIR,
+            #     "customers",
+            #     str(customer_id),
+            #     "events",
+            #     str(event_id)
+            # )
+
+            event_dir = os.path.join(settings.STORAGE_DIR, "customers", str(customer_id), "events", str(event_id).lower())
+
+
             
             original_dir = os.path.join(event_dir, "original")
             os.makedirs(original_dir, exist_ok=True)
