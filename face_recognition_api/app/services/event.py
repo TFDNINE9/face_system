@@ -193,7 +193,7 @@ async def create_event(event: EventCreate):
         
             # Create storage directories
             customer_dir = os.path.join(settings.STORAGE_DIR, "customers", event.customer_id)
-            event_dir = os.path.join(customer_dir, "events", event_id)
+            event_dir = os.path.join(customer_dir, "events", event_id.lower())
             os.makedirs(os.path.join(event_dir, "original"), exist_ok=True)
             os.makedirs(os.path.join(event_dir, "faces"), exist_ok=True)
             os.makedirs(os.path.join(event_dir, "embeddings"), exist_ok=True)

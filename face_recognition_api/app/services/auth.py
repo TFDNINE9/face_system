@@ -1244,7 +1244,7 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                 SELECT 
                     u.user_id, u.username, u.email, u.phone, 
                     u.is_active, u.is_email_verified, u.last_login,
-                    u.created_at, u.updated_at
+                    u.created_at, u.updated_at, u.customer_id
                 FROM auth_users u
                 ORDER BY u.username
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
@@ -1253,7 +1253,12 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
             )
             
             users = []
-            while row := cursor.fetchone():
+            rows = cursor.fetchall()
+            
+            if not rows:
+                return []
+            
+            for row in rows:
                 user_id = row[0]
                 
            
@@ -1268,8 +1273,8 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                 )
                 
                 groups = []
-                group_row = cursor.fetchone()
-                while group_row:
+                group_rows = cursor.fetchall()
+                for group_row in group_rows:
                     groups.append({
                         "group_id": str(group_row[0]),
                         "name": group_row[1],
@@ -1290,6 +1295,7 @@ def get_all_users(skip: int = 0, limit: int = 100) -> List[UserResponse]:
                     "last_login": row[6].isoformat() if row[6] else None,
                     "created_at": row[7].isoformat() if row[7] else None,
                     "updated_at": row[8].isoformat() if row[8] else None,
+                    "customer_id": str(row[9]) if row[9] else None,
                     "groups": groups
                 }
                 

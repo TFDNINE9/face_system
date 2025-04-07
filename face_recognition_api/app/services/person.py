@@ -2,7 +2,7 @@ import logging
 import uuid
 from ..schemas.person import PersonUpdate
 from ..services.error_handling import handle_service_error
-from main import get_db_connection
+from ..database import get_db_connection
 from .error_handling import (
     handle_service_error,
     NotFoundError,

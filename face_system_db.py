@@ -297,7 +297,7 @@ class DatabaseFaceSystem:
             'customers',
             str(customer_id),
             'events',
-            str(event_id)
+            str(event_id).lower()
         )
         
         return base_path
@@ -1020,6 +1020,8 @@ class DatabaseFaceSystem:
                     
                     similarity = self._calculate_similarity(face['embedding'], rep_embedding)
                     
+                    similarity - float(similarity)
+                    
                     # Update face record with cluster_id
                     cursor.execute(
                         "UPDATE faces SET cluster_id = ? WHERE face_id = ?",
@@ -1128,7 +1130,7 @@ class DatabaseFaceSystem:
             # Convert to similarity where 1.0 is identical
             similarity = max(0.0, 1.0 - distance)
         
-        return similarity
+        return float(similarity)
     
     def _update_event_after_clustering(self, event_id):
         """

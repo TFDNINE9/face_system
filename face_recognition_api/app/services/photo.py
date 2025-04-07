@@ -136,13 +136,12 @@ async def upload_event_images(event_id: str, files: list[UploadFile]):
                     f"Cannot upload to event with status: {event_status}",
                     details={"event_status": event_status}
                 )
-            
             event_dir = os.path.join(
                 settings.STORAGE_DIR,
                 "customers",
                 str(customer_id),
                 "events",
-                str(event_id)
+                str(event_id).lower()  
             )
             
             original_dir = os.path.join(event_dir, "original")
