@@ -32,7 +32,9 @@ DB_CONFIG = {
     'database': os.getenv("DB_NAME"),
     'username': os.getenv("DB_USER"),
     'password': os.getenv("DB_PASSWORD"),
-    'driver': os.getenv("DB_DRIVER", '{ODBC Driver 17 for SQL Server}')
+    'driver': os.getenv("DB_DRIVER", '{ODBC Driver 18 for SQL Server}'),
+    'trust_server_certificate': 'yes',
+    'encrypt': 'yes'
 }
 
 DB_CONNECTION_STRING = (
@@ -40,7 +42,9 @@ DB_CONNECTION_STRING = (
     f"SERVER={DB_CONFIG['server']};"
     f"DATABASE={DB_CONFIG['database']};"
     f"UID={DB_CONFIG['username']};"
-    f"PWD={DB_CONFIG['password']}"
+    f"PWD={DB_CONFIG['password']};"
+    f"TrustServerCertificate=yes;Encrypt=yes"
+
 )
 
 config = FaceSystemConfig()

@@ -49,11 +49,13 @@ class FaceSystemConfig:
         
         # Database configuration
         self.db = {
-            'server': '100.102.194.74',
-            'database': 'TopDb2',
-            'username': 'usrtop',
-            'password': 'TTTop@2o25',
-            'driver': '{ODBC Driver 17 for SQL Server}'
+            'server': '',
+            'database': '',
+            'username': '',
+            'password': '',
+            'driver': '{ODBC Driver 18 for SQL Server}',
+            'trust_server_certificate': 'yes',
+            'encrypt': 'yes'
         }
 
 
@@ -79,7 +81,8 @@ class DatabaseFaceSystem:
                     f"SERVER={self.config.db['server']};"
                     f"DATABASE={self.config.db['database']};"
                     f"UID={self.config.db['username']};"
-                    f"PWD={self.config.db['password']}"
+                    f"PWD={self.config.db['password']};"
+                    f"TrustServerCertificate=yes;Encrypt=yes"
                 )
             
             # Test database connection
@@ -93,10 +96,10 @@ class DatabaseFaceSystem:
                 providers.append('CUDAExecutionProvider')
                 logger.info("CUDA support enabled")
             
-            # Add OpenVINO if available
-            if self._is_openvino_available():
-                providers.append('OpenVINOExecutionProvider')
-                logger.info("OpenVINO support enabled")
+            # # Add OpenVINO if available
+            # if self._is_openvino_available():
+            #     providers.append('OpenVINOExecutionProvider')
+            #     logger.info("OpenVINO support enabled")
                 
             # Always include CPU as a fallback
             providers.append('CPUExecutionProvider')
@@ -153,14 +156,14 @@ class DatabaseFaceSystem:
         except ImportError:
             return False
     
-    def _is_openvino_available(self) -> bool:
-        """Check if OpenVINO is available for acceleration."""
-        try:
-            import openvino as ov
-            core = ov.Core()
-            return 'GPU' in core.available_devices
-        except ImportError:
-            return False
+    # def _is_openvino_available(self) -> bool:
+    #     """Check if OpenVINO is available for acceleration."""
+    #     try:
+    #         import openvino as ov
+    #         core = ov.Core()
+    #         return 'GPU' in core.available_devices
+    #     except ImportError:
+    #         return False
     
     def _get_status_id(self, cursor, status_code, status_type='status_types'):
         """Get a status ID from its code."""

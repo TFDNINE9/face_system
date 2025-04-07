@@ -18,7 +18,7 @@ def get_db_config():
         'database': settings.DB_NAME,
         'username': settings.DB_USER,
         'password': settings.DB_PASSWORD,
-        'driver': settings.DB_DRIVER
+        'driver': settings.DB_DRIVER,
     }
 
 @contextmanager

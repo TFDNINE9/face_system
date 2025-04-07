@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS512")
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15.0"))
     
-    
+    DB_CONNECTION_PARAMS: str = os.getenv("DB_CONNECTION_PARAMS", "TrustServerCertificate=yes;Encrypt=yes")
     SMTP_SERVER: str = os.getenv("SMTP_SERVER", "")
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
@@ -54,13 +54,14 @@ class Settings(BaseSettings):
     
     @property
     def DB_CONNECTION_STRING(self) -> str:
-   
+        params = self.DB_CONNECTION_PARAMS if hasattr(self, 'DB_CONNECTION_PARAMS') else ""
         return (
             f"DRIVER={self.DB_DRIVER};"
             f"SERVER={self.DB_SERVER};"
             f"DATABASE={self.DB_NAME};"
             f"UID={self.DB_USER};"
-            f"PWD={self.DB_PASSWORD}"
+            f"PWD={self.DB_PASSWORD};"
+            f"{params}"
         )
     
     @property
@@ -75,7 +76,9 @@ class Settings(BaseSettings):
             'database': self.DB_NAME,
             'username': self.DB_USER,
             'password': self.DB_PASSWORD,
-            'driver': self.DB_DRIVER
+            'driver': self.DB_DRIVER,
+            'trust_server_certificate': 'yes',
+            'encrypt': 'yes'
         }
         
         return config
